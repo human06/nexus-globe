@@ -33,9 +33,19 @@ _services = [
 
 
 async def _run_service(service) -> None:
-    """Wrapper that calls service.ingest() and logs any errors."""
+    """Wrapper that calls service.ingest() and logs each cycle."""
+    logger.info(
+        "Scheduler: running %s (interval: %ds)",
+        service.source_name,
+        service.poll_interval_seconds,
+    )
     try:
-        await service.ingest()
+        count = await service.ingest()
+        logger.info(
+            "Scheduler: %s completed — %d events upserted",
+            service.source_name,
+            count or 0,
+        )
     except Exception as exc:
         logger.exception(
             "[scheduler] Error in %s ingestion: %s", service.source_name, exc
@@ -64,4 +74,18 @@ def start_scheduler() -> AsyncIOScheduler:
 
     _scheduler.start()
     logger.info("[scheduler] APScheduler started with %d jobs.", len(_services))
+    return _scheduler
+
+
+def stop_scheduler() -> None:
+    """Gracefully shut down the APScheduler (waits for running jobs to finish)."""
+    global _scheduler
+    if _scheduler is not None and _scheduler.running:
+        _scheduler.shutdown(wait=True)
+        logger.info("[scheduler] APScheduler stopped.")
+    _scheduler = None
+
+
+def get_scheduler() -> AsyncIOScheduler | None:
+    """Return the running scheduler instance (or None if not started)."""
     return _scheduler

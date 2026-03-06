@@ -102,11 +102,19 @@ async def health_check(db: Annotated[AsyncSession, Depends(get_db)]):
     redis_ok = await redis_ping()
     uptime = round(time.time() - APP_START_TIME, 1) if APP_START_TIME else 0.0
 
+    from app.scheduler import get_scheduler  # local import avoids circular dep
+    sched = get_scheduler()
+    scheduler_info = {
+        "running": sched is not None and sched.running,
+        "job_count": len(sched.get_jobs()) if sched and sched.running else 0,
+    }
+
     return {
         "status": "ok" if (db_ok and redis_ok) else "degraded",
         "service": "nexus-globe-backend",
         "db": db_detail,
         "redis": "connected" if redis_ok else "unavailable",
+        "scheduler": scheduler_info,
         "uptime_seconds": uptime,
     }
 

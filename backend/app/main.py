@@ -11,7 +11,7 @@ from app.api.routes import router as api_router
 from app.api.websocket import manager
 from app.db.database import init_db
 from app.db.redis import init_redis, close_redis
-from app.scheduler import start_scheduler
+from app.scheduler import start_scheduler, stop_scheduler
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +30,7 @@ async def lifespan(app: FastAPI):
     start_scheduler()
     yield
     logger.info("Nexus Globe backend shutting down…")
+    stop_scheduler()
     await close_redis()
 
 
