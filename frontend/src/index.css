@@ -1,0 +1,5 @@
+/* Google Fonts — must be first */
+@import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=JetBrains+Mono:wght@400;700&family=Share+Tech+Mono&display=swap');
+
+@import "tailwindcss";
+@import "./styles/cyberpunk.css";

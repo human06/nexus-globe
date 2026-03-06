@@ -1,0 +1,81 @@
+/* ── Cyberpunk Design Tokens ── */
+:root {
+  --bg-primary: #0a0a0f;
+  --bg-secondary: #12121a;
+  --bg-panel: rgba(10, 10, 20, 0.85);
+
+  --neon-cyan: #00f0ff;
+  --neon-magenta: #ff00aa;
+  --neon-green: #00ff88;
+  --neon-yellow: #ffee00;
+  --neon-red: #ff2244;
+  --neon-orange: #ff6600;
+
+  --font-display: 'Orbitron', monospace;
+  --font-mono: 'JetBrains Mono', monospace;
+  --font-body: 'Share Tech Mono', monospace;
+
+  --border-glow: 0 0 8px var(--neon-cyan), 0 0 16px rgba(0, 240, 255, 0.3);
+  --text-glow: 0 0 6px var(--neon-cyan);
+}
+
+/* ── Base ── */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+body {
+  background: var(--bg-primary);
+  color: var(--neon-cyan);
+  font-family: var(--font-body);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+/* ── Scanline Overlay ── */
+body::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background: repeating-linear-gradient(
+    to bottom,
+    transparent,
+    transparent 2px,
+    rgba(0, 0, 0, 0.08) 2px,
+    rgba(0, 0, 0, 0.08) 4px
+  );
+  pointer-events: none;
+  z-index: 9999;
+}
+
+/* ── Utility Classes ── */
+.font-display {
+  font-family: var(--font-display);
+}
+.font-mono {
+  font-family: var(--font-mono);
+}
+
+.panel {
+  background: var(--bg-panel);
+  border: 1px solid var(--neon-cyan);
+  box-shadow: var(--border-glow);
+  border-radius: 2px;
+  backdrop-filter: blur(8px);
+}
+
+.neon-text {
+  color: var(--neon-cyan);
+  text-shadow: var(--text-glow);
+}
