@@ -53,6 +53,19 @@ class GlobeEventResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+# ── Layer schemas ─────────────────────────────────────────────────────────────
+
+class LayerInfo(BaseModel):
+    """Status and metadata for a single data layer."""
+    type: str
+    label: str
+    color: str
+    source: str
+    status: str          # "active" | "coming_soon" | "error"
+    event_count: int
+    last_updated: datetime | None
+
+
 # ── WebSocket schemas ──────────────────────────────────────────────────────────
 
 class WebSocketMessage(BaseModel):
