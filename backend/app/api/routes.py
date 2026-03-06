@@ -10,6 +10,7 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.database import get_db
+from app.db.redis import redis_ping
 from app.models.event import Event
 from app.models.schemas import GlobeEventResponse
 
@@ -34,13 +35,17 @@ async def health_check(db: Annotated[AsyncSession, Depends(get_db)]):
         db_detail = str(exc)
         logger.warning("Health check DB error: %s", exc)
 
+    # Test Redis connectivity
+    redis_ok = await redis_ping()
+
     uptime_seconds = round(time.time() - APP_START_TIME, 1) if APP_START_TIME else 0.0
 
+    overall = "ok" if (db_ok and redis_ok) else "degraded"
     return {
-        "status": "ok" if db_ok else "degraded",
+        "status": overall,
         "service": "nexus-globe-backend",
         "db": db_detail,
-        "redis": "not_configured",  # wired up in Story 1.2
+        "redis": "connected" if redis_ok else "unavailable",
         "uptime_seconds": uptime_seconds,
     }
 
