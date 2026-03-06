@@ -68,6 +68,20 @@ class LayerInfo(BaseModel):
 
 # ── WebSocket schemas ──────────────────────────────────────────────────────────
 
+class WSMessage(BaseModel):
+    """Message sent from client → server."""
+    action: Literal["subscribe", "unsubscribe", "get_detail"]
+    layers: list[str] | None = None
+    event_id: str | None = None
+
+
+class WSPush(BaseModel):
+    """Message pushed from server → client."""
+    type: Literal["event_update", "event_batch", "event_remove", "snapshot", "ping", "error"]
+    data: Any = None
+
+
+# Legacy aliases kept for backwards compatibility
 class WebSocketMessage(BaseModel):
     type: Literal["event_batch", "layer_status", "ping", "pong"]
     payload: Any = None

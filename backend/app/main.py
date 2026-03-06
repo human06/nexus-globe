@@ -58,16 +58,51 @@ app.include_router(api_router)
 # ── WebSocket endpoint ─────────────────────────────────────────────────────────
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
+    """
+    Real-time event stream.
+
+    Client sends:
+      { "action": "subscribe",   "layers": ["flight", "news"] }
+      { "action": "unsubscribe", "layers": ["flight"] }
+      { "action": "get_detail",  "event_id": "<uuid>" }
+
+    Server pushes:
+      { "type": "snapshot",     "data": [...] }
+      { "type": "event_update", "data": {...} }
+      { "type": "event_batch",  "data": [...] }
+      { "type": "event_remove", "data": {"id": "..."} }
+      { "type": "ping" }
+    """
     await manager.connect(websocket)
     try:
         while True:
-            data = await websocket.receive_json()
-            # Handle subscribe / unsubscribe messages
+            try:
+                data = await websocket.receive_json()
+            except Exception:
+                # Malformed message — log and skip
+                logger.debug("Malformed WebSocket message, skipping")
+                continue
+
             action = data.get("action")
-            layer = data.get("layer")
-            if action == "subscribe" and layer:
-                await manager.subscribe(websocket, layer)
-            elif action == "unsubscribe" and layer:
-                await manager.unsubscribe(websocket, layer)
+
+            if action == "subscribe":
+                layers = data.get("layers") or []
+                if isinstance(layers, list) and layers:
+                    await manager.subscribe(websocket, layers)
+
+            elif action == "unsubscribe":
+                layers = data.get("layers") or []
+                if isinstance(layers, list) and layers:
+                    await manager.unsubscribe(websocket, layers)
+
+            elif action == "get_detail":
+                # Placeholder — full detail lookup wired in later stories
+                event_id = data.get("event_id")
+                if event_id:
+                    await manager.push(
+                        websocket,
+                        {"type": "error", "data": {"message": "get_detail not yet implemented"}},
+                    )
+
     except WebSocketDisconnect:
-        manager.disconnect(websocket)
+        await manager.disconnect(websocket)
