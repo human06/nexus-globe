@@ -114,6 +114,7 @@ async def upsert_events(
                         "source_id":   row["source_id"],
                         "metadata":    row["metadata"],
                         "trail":       row["trail"],
+                        "created_at":  datetime.now(timezone.utc).isoformat(),
                         "expires_at":  expires_at.isoformat() if expires_at else None,
                     }
                     result_tuples.append((json.dumps(payload), expires_at, final_id))

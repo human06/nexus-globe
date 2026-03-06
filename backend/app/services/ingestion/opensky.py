@@ -50,7 +50,7 @@ _MILITARY_RE = re.compile(
 TRAIL_MAX = 10
 
 # Aircraft considered "expired" after this many seconds without update
-FLIGHT_TTL_SECONDS = 60
+FLIGHT_TTL_SECONDS = 300  # 5 minutes — must survive a full upsert cycle
 
 # Retry backoff for failed requests (seconds)
 _BACKOFF = [1, 2, 5, 10, 30]

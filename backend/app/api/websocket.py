@@ -29,9 +29,12 @@ import asyncio
 import json
 import logging
 from collections import defaultdict
+from datetime import datetime, timezone
 
 from fastapi.websockets import WebSocket, WebSocketState
+from sqlalchemy import text
 
+from app.db.database import AsyncSessionLocal
 from app.db.redis import get_layer_snapshot, subscribe_channel
 
 logger = logging.getLogger(__name__)
@@ -164,16 +167,79 @@ class ConnectionManager:
         """
         Fetch all cached events for a layer from Redis and push them as a
         ``snapshot`` message to the newly-subscribed client.
+        Falls back to a direct DB query if Redis cache is cold/empty.
         """
         try:
             raw_events = await get_layer_snapshot(layer)
-            events = [json.loads(raw) for raw in raw_events]
+            if raw_events:
+                events = [json.loads(raw) for raw in raw_events]
+            else:
+                # Redis cold — query DB directly for non-expired events
+                logger.info("Redis cold for layer '%s', falling back to DB", layer)
+                events = await self._db_snapshot(layer)
+                # Repopulate Redis cache for next time
+                for ev in events:
+                    try:
+                        from app.db.redis import cache_event
+                        expires_at = None
+                        if ev.get("expires_at"):
+                            expires_at = datetime.fromisoformat(ev["expires_at"])
+                        await cache_event(
+                            event_id=ev["id"],
+                            event_type=layer,
+                            payload_json=json.dumps(ev),
+                            expires_at=expires_at,
+                        )
+                    except Exception:
+                        pass
             await self.push(websocket, {"type": "snapshot", "data": events})
-            logger.debug(
-                "Sent snapshot for layer '%s': %d events", layer, len(events)
-            )
+            logger.info("Sent snapshot for layer '%s': %d events", layer, len(events))
         except Exception as exc:
             logger.warning("Snapshot failed for layer '%s': %s", layer, exc)
+
+    async def _db_snapshot(self, layer: str) -> list[dict]:
+        """Query PostgreSQL for active (non-expired) events of a given type."""
+        now = datetime.now(timezone.utc)
+        async with AsyncSessionLocal() as session:
+            rows = await session.execute(
+                text("""
+                    SELECT
+                        id::text, event_type, category, title, description,
+                        ST_Y(location::geometry) AS lat,
+                        ST_X(location::geometry) AS lng,
+                        altitude_m, heading_deg, speed_kmh, severity,
+                        source, source_url, source_id, metadata, trail,
+                        created_at, expires_at
+                    FROM events
+                    WHERE event_type = :layer
+                      AND (expires_at IS NULL OR expires_at > :now)
+                    LIMIT 2000
+                """),
+                {"layer": layer, "now": now},
+            )
+            results = []
+            for r in rows.mappings():
+                results.append({
+                    "id":          r["id"],
+                    "event_type":  r["event_type"],
+                    "category":    r["category"],
+                    "title":       r["title"],
+                    "description": r["description"],
+                    "latitude":    float(r["lat"]) if r["lat"] is not None else None,
+                    "longitude":   float(r["lng"]) if r["lng"] is not None else None,
+                    "altitude_m":  r["altitude_m"],
+                    "heading_deg": r["heading_deg"],
+                    "speed_kmh":   r["speed_kmh"],
+                    "severity":    r["severity"],
+                    "source":      r["source"],
+                    "source_url":  r["source_url"],
+                    "source_id":   r["source_id"],
+                    "metadata":    r["metadata"],
+                    "trail":       r["trail"],
+                    "created_at":  r["created_at"].isoformat() if r["created_at"] else None,
+                    "expires_at":  r["expires_at"].isoformat() if r["expires_at"] else None,
+                })
+        return results
 
     # ── Redis listener (one per active layer) ─────────────────────────────────
 

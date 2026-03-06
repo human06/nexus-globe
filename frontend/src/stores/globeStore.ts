@@ -36,6 +36,8 @@ interface GlobeStore {
 
 const now = Date.now();
 const h24 = 24 * 60 * 60 * 1000;
+// Upper bound rolls 24 h ahead so live events are never filtered out
+const FUTURE = now + h24;
 
 export const useGlobeStore = create<GlobeStore>((set) => ({
   events: new Map(),
@@ -50,7 +52,7 @@ export const useGlobeStore = create<GlobeStore>((set) => ({
     cameras: true,
   },
   severityRange: [1, 5],
-  timeRange: [now - h24, now],
+  timeRange: [now - h24, FUTURE],
   searchQuery: '',
   selectedEventId: null,
   wsStatus: 'disconnected',

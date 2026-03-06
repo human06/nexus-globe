@@ -32,14 +32,21 @@ export default function GlobeCanvas() {
     if (!container) return;
 
     // ── Instantiate Globe.GL ──────────────────────────────────────────────────
-    const globe = Globe()(container)
-      .width(window.innerWidth)
-      .height(window.innerHeight)
-      .globeImageUrl('/textures/earth-dark.jpg')
-      .backgroundImageUrl('/textures/night-sky.png')
-      .atmosphereColor('#00f0ff')
-      .atmosphereAltitude(0.25)
-      .pointOfView({ lat: 20, lng: 0, altitude: 2.5 }, 0);
+    let globe: GlobeInstance;
+    try {
+      globe = Globe()(container)
+        .width(window.innerWidth)
+        .height(window.innerHeight)
+        .globeImageUrl('/textures/earth-dark.jpg')
+        .backgroundImageUrl('/textures/night-sky.png')
+        .atmosphereColor('#00f0ff')
+        .atmosphereAltitude(0.25)
+        .pointOfView({ lat: 20, lng: 0, altitude: 2.5 }, 0);
+    } catch (err) {
+      console.error('[GlobeCanvas] Globe.GL init failed:', err);
+      setIsLoaded(true);
+      return;
+    }
 
     // ── Auto-rotation ─────────────────────────────────────────────────────────
     const ctrl = globe.controls();
@@ -92,7 +99,9 @@ export default function GlobeCanvas() {
     window.addEventListener('resize', onResize);
 
     // ── Expose instance to child layers via context ───────────────────────────
-    setGlobeInstance(globe);
+    // Globe.GL returns a callable function; wrap in arrow so React doesn't
+    // treat it as a state-updater callback: setState(fn) → fn(prevState).
+    setGlobeInstance(() => globe);
 
     return () => {
       window.removeEventListener('resize', onResize);
