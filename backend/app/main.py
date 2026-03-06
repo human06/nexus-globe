@@ -1,5 +1,6 @@
 """FastAPI application entry point."""
 import logging
+import time
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -13,10 +14,15 @@ from app.scheduler import start_scheduler
 
 logger = logging.getLogger(__name__)
 
+# Module-level startup timestamp (seconds since epoch)
+APP_START_TIME: float = 0.0
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup / shutdown lifecycle."""
+    global APP_START_TIME
+    APP_START_TIME = time.time()
     logger.info("Nexus Globe backend starting…")
     await init_db()
     start_scheduler()

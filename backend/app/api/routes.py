@@ -2,10 +2,11 @@
 from __future__ import annotations
 
 import logging
+import time
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.database import get_db
@@ -18,9 +19,30 @@ router = APIRouter(prefix="/api")
 
 
 @router.get("/health")
-async def health_check():
-    """Health check endpoint."""
-    return {"status": "ok", "service": "nexus-globe-backend"}
+async def health_check(db: Annotated[AsyncSession, Depends(get_db)]):
+    """Health check — returns DB connectivity status and service uptime."""
+    from app.main import APP_START_TIME  # avoid circular import at module level
+
+    # Test database connectivity with a lightweight query
+    db_ok = False
+    db_detail = "unknown"
+    try:
+        await db.execute(text("SELECT 1"))
+        db_ok = True
+        db_detail = "connected"
+    except Exception as exc:
+        db_detail = str(exc)
+        logger.warning("Health check DB error: %s", exc)
+
+    uptime_seconds = round(time.time() - APP_START_TIME, 1) if APP_START_TIME else 0.0
+
+    return {
+        "status": "ok" if db_ok else "degraded",
+        "service": "nexus-globe-backend",
+        "db": db_detail,
+        "redis": "not_configured",  # wired up in Story 1.2
+        "uptime_seconds": uptime_seconds,
+    }
 
 
 @router.get("/layers")

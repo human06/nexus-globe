@@ -6,9 +6,11 @@ from geoalchemy2 import Geography
 from sqlalchemy import (
     DateTime,
     Float,
+    Index,
     Integer,
     String,
     Text,
+    UniqueConstraint,
     func,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
@@ -19,6 +21,16 @@ from app.db.database import Base
 
 class Event(Base):
     __tablename__ = "events"
+
+    # Indexes + constraints applied at table level
+    __table_args__ = (
+        # Composite index for the most common query pattern: type + time
+        Index("ix_events_event_type_created_at", "event_type", "created_at"),
+        # GIST spatial index on the PostGIS geography column
+        Index("ix_events_location_gist", "location", postgresql_using="gist"),
+        # Deduplication key: same source cannot produce two records with same source_id
+        UniqueConstraint("source", "source_id", name="uq_events_source_source_id"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
