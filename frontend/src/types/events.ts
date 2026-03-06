@@ -36,3 +36,78 @@ export interface LayerConfig {
   icon: string;
   visible: boolean;
 }
+
+// ── WebSocket message types ────────────────────────────────────────────────────
+
+export type WSStatus = 'connected' | 'connecting' | 'disconnected';
+
+/**
+ * Message types pushed from the backend WebSocket server.
+ */
+export type WSMessageType =
+  | 'snapshot'      // Initial batch of events for a layer
+  | 'event_update'  // Single event upsert
+  | 'event_batch'   // Multiple events upsert
+  | 'event_remove'  // An event expired / was deleted
+  | 'ping'          // Heartbeat from server
+  | 'error';        // Server-side error
+
+export interface WSSnapshot {
+  type: 'snapshot';
+  data: GlobeEvent[];
+}
+
+export interface WSEventUpdate {
+  type: 'event_update';
+  data: GlobeEvent;
+}
+
+export interface WSEventBatch {
+  type: 'event_batch';
+  data: GlobeEvent[];
+}
+
+export interface WSEventRemove {
+  type: 'event_remove';
+  data: { id: string };
+}
+
+export interface WSPing {
+  type: 'ping';
+}
+
+export interface WSError {
+  type: 'error';
+  data: { message: string };
+}
+
+export type WSIncomingMessage =
+  | WSSnapshot
+  | WSEventUpdate
+  | WSEventBatch
+  | WSEventRemove
+  | WSPing
+  | WSError;
+
+// ── Client → Server message types ─────────────────────────────────────────────
+
+export interface WSSubscribeAction {
+  action: 'subscribe';
+  layers: string[];
+}
+
+export interface WSUnsubscribeAction {
+  action: 'unsubscribe';
+  layers: string[];
+}
+
+export interface WSGetDetailAction {
+  action: 'get_detail';
+  event_id: string;
+}
+
+export type WSOutgoingMessage =
+  | WSSubscribeAction
+  | WSUnsubscribeAction
+  | WSGetDetailAction;
+

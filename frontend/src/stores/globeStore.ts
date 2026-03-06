@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { GlobeEvent, EventType } from '../types/events';
+import type { GlobeEvent, EventType, WSStatus } from '../types/events';
 
 interface LayerVisibility {
   news: boolean;
@@ -20,14 +20,18 @@ interface GlobeStore {
   timeRange: [number, number];
   searchQuery: string;
   selectedEventId: string | null;
+  /** WebSocket connection status (driven by useWebSocket hook) */
+  wsStatus: WSStatus;
 
   // Actions
   toggleLayer: (layer: keyof LayerVisibility) => void;
   selectEvent: (id: string | null) => void;
   upsertEvents: (incoming: GlobeEvent[]) => void;
+  removeEvent: (id: string) => void;
   removeExpired: () => void;
   setTimeRange: (range: [number, number]) => void;
   setSearchQuery: (query: string) => void;
+  setWsStatus: (status: WSStatus) => void;
 }
 
 const now = Date.now();
@@ -49,6 +53,7 @@ export const useGlobeStore = create<GlobeStore>((set) => ({
   timeRange: [now - h24, now],
   searchQuery: '',
   selectedEventId: null,
+  wsStatus: 'disconnected',
 
   toggleLayer: (layer) =>
     set((state) => ({
@@ -63,6 +68,13 @@ export const useGlobeStore = create<GlobeStore>((set) => ({
       for (const ev of incoming) {
         next.set(ev.id, ev);
       }
+      return { events: next };
+    }),
+
+  removeEvent: (id) =>
+    set((state) => {
+      const next = new Map(state.events);
+      next.delete(id);
       return { events: next };
     }),
 
@@ -81,7 +93,10 @@ export const useGlobeStore = create<GlobeStore>((set) => ({
   setTimeRange: (range) => set({ timeRange: range }),
 
   setSearchQuery: (query) => set({ searchQuery: query }),
+
+  setWsStatus: (status) => set({ wsStatus: status }),
 }));
 
 // Convenience type export
 export type { GlobeStore, LayerVisibility, EventType };
+

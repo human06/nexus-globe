@@ -11,9 +11,10 @@
 import { useEffect, useRef, useState } from 'react';
 import Globe from 'globe.gl';
 import { GlobeContext, type GlobeInstance } from './GlobeContext';
+import FlightLayer from './layers/FlightLayer';
 
 // Auto-rotate speed (OrbitControls unit: full rotations per minute × 2)
-// 2.0 = 30 s/rotation. We want ~3 min/rotation → 2.0 * (30/180) ≈ 0.33
+// We want ~3 min/rotation → 0.33
 const AUTO_ROTATE_SPEED = 0.33;
 // Delay after the user stops interacting before rotation resumes (ms)
 const RESUME_DELAY_MS = 2500;
@@ -153,6 +154,9 @@ export default function GlobeCanvas() {
         id="globe-canvas"
         style={{ position: 'fixed', inset: 0, zIndex: 0 }}
       />
+
+      {/* Data layers — rendered as imperative effects, return null */}
+      {globeInstance && <FlightLayer />}
     </GlobeContext.Provider>
   );
 }

@@ -3,7 +3,7 @@ import GlobeCanvas from './components/Globe/GlobeCanvas';
 import HUDOverlay from './components/HUD/HUDOverlay';
 import SidePanel from './components/Panel/SidePanel';
 import LayerControls from './components/Controls/LayerControls';
-import TimelineScrubber from './components/Timeline/TimelineScrubber';
+import { useWebSocket } from './hooks/useWebSocket';
 
 /**
  * Root layout — components stack over the globe via absolute/fixed positioning:
@@ -13,16 +13,18 @@ import TimelineScrubber from './components/Timeline/TimelineScrubber';
  *  │  HUDOverlay  (z:10, top corners)           │
  *  │  LayerControls (z:20, left edge)           │
  *  │  SidePanel   (z:20, right edge)            │
- *  │  TimelineScrubber (z:20, bottom)           │
  *  └────────────────────────────────────────────┘
  */
-export default function App() {
+function AppInner() {
+  // Starts the persistent WebSocket connection and feeds data into the store
+  useWebSocket();
+
   return (
     <div className="nexus-root">
       {/* Layer 0 — 3-D globe fills the viewport */}
       <GlobeCanvas />
 
-      {/* Layer 10 — HUD telemetry overlay */}
+      {/* Layer 10 — HUD telemetry overlay (pointer-events:none inside) */}
       <div style={{ position: 'fixed', inset: 0, zIndex: 10, pointerEvents: 'none' }}>
         <HUDOverlay />
       </div>
@@ -35,10 +37,11 @@ export default function App() {
       <div style={{ position: 'fixed', top: 0, right: 0, height: '100%', zIndex: 20 }}>
         <SidePanel />
       </div>
-
-      <div style={{ position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 20 }}>
-        <TimelineScrubber />
-      </div>
     </div>
   );
 }
+
+export default function App() {
+  return <AppInner />;
+}
+
