@@ -14,7 +14,7 @@ import type { GlobeEvent, WSIncomingMessage } from '../types/events';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-const WS_URL = 'ws://localhost:8000/ws';
+const WS_URL = (import.meta.env.VITE_WS_URL ?? 'ws://localhost:8001') + '/ws';
 const BACKOFF_STEPS_MS = [1_000, 2_000, 4_000, 8_000, 16_000, 30_000];
 
 // ── Server → Frontend normalisation ──────────────────────────────────────────

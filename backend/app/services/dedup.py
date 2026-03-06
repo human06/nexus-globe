@@ -62,13 +62,14 @@ async def upsert_events(
                     "source":      ev.get("source", ""),
                     "source_url":  ev.get("source_url"),
                     "source_id":   ev.get("source_id"),
-                    "metadata_":   ev.get("metadata", {}),
+                    "metadata":    ev.get("metadata", {}),
                     "trail":       ev.get("trail"),
                     "expires_at":  ev.get("expires_at"),
                 }
 
+                tbl = Event.__table__
                 stmt = (
-                    pg_insert(Event)
+                    pg_insert(tbl)
                     .values(**row)
                     .on_conflict_do_update(
                         constraint="uq_events_source_source_id",
@@ -80,13 +81,13 @@ async def upsert_events(
                             "heading_deg": row["heading_deg"],
                             "speed_kmh":   row["speed_kmh"],
                             "severity":    row["severity"],
-                            "metadata_":   row["metadata_"],
+                            "metadata":    row["metadata"],
                             "trail":       row["trail"],
                             "expires_at":  row["expires_at"],
                             "updated_at":  datetime.now(timezone.utc),
                         },
                     )
-                    .returning(Event.id, Event.expires_at)
+                    .returning(tbl.c.id, tbl.c.expires_at)
                 )
 
                 res = await session.execute(stmt)
@@ -111,7 +112,7 @@ async def upsert_events(
                         "source":      row["source"],
                         "source_url":  row["source_url"],
                         "source_id":   row["source_id"],
-                        "metadata":    row["metadata_"],
+                        "metadata":    row["metadata"],
                         "trail":       row["trail"],
                         "expires_at":  expires_at.isoformat() if expires_at else None,
                     }
