@@ -79,3 +79,21 @@ body::after {
   color: var(--neon-cyan);
   text-shadow: var(--text-glow);
 }
+
+/* ── Animations ── */
+@keyframes nexus-pulse {
+  0%, 100% { opacity: 1; text-shadow: 0 0 8px var(--neon-cyan), 0 0 20px rgba(0, 240, 255, 0.6); }
+  50%       { opacity: 0.4; text-shadow: none; }
+}
+
+@keyframes nexus-blink {
+  0%, 100% { opacity: 1; }
+  49%      { opacity: 1; }
+  50%      { opacity: 0; }
+}
+
+@keyframes nexus-scanline {
+  0%   { transform: translateY(-100%); }
+  100% { transform: translateY(100vh); }
+}
+
