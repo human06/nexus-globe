@@ -352,7 +352,7 @@ class AISStreamIngestionService(BaseIngestionService):
                 "source":          source,
                 "source_id":       str(mmsi),
                 "source_url":      f"https://www.marinetraffic.com/en/ais/details/ships/mmsi:{mmsi}",
-                "expires_at":      now + timedelta(seconds=120),
+                "expires_at":      now + timedelta(hours=2),
                 "needs_geocoding": False,
                 "metadata": {
                     "mmsi":            mmsi,
