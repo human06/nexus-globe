@@ -185,7 +185,11 @@ class AISStreamIngestionService(BaseIngestionService):
     """Live vessel tracking via AISstream.io WebSocket feed, with demo fallback."""
 
     source_name           = "aisstream"
-    poll_interval_seconds = 60
+    # 5 minutes — AISstream is a persistent WebSocket feed, not a REST API.
+    # Rapid reconnects (60s) hammer Cloudflare's bot scoring and cause the
+    # IP to be rate-limited (silent upgrade drop). 300s gives CF time to
+    # reset between scheduler cycles while still keeping ships fresh.
+    poll_interval_seconds = 300
 
     def __init__(self) -> None:
         super().__init__()
