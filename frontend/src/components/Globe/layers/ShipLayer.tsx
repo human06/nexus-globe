@@ -197,7 +197,7 @@ export default function ShipLayer() {
   globeRef.current = globe;
 
   const ships          = useLayerData('ship');
-  const isVisible      = useGlobeStore((s) => s.layers['ship']?.visible ?? true);
+  const isVisible      = useGlobeStore((s) => s.layers.ships);
   const selectEvent    = useGlobeStore((s) => s.selectEvent);
   const selectedEventId = useGlobeStore((s) => s.selectedEventId);
   const setLayer       = useHtmlMarkersStore((s) => s.setLayer);
