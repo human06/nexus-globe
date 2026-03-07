@@ -42,7 +42,7 @@ logger = logging.getLogger(__name__)
 _AISSTREAM_URL   = "wss://stream.aisstream.io/v0/stream"
 _COLLECT_SECS    = 30
 _TRAIL_MAXLEN    = 20
-_WS_OPEN_TIMEOUT = 12    # seconds for WebSocket opening handshake
+_WS_OPEN_TIMEOUT = 30    # seconds for WebSocket opening handshake (legacy API needs more time)
 
 _SHIP_TYPES: list[tuple[range, str]] = [
     (range(30, 40), "fishing"),
@@ -215,18 +215,16 @@ class AISStreamIngestionService(BaseIngestionService):
         vessels: dict[int, dict] = {}
 
         try:
-            from websockets.asyncio.client import connect as ws_connect  # type: ignore
+            # Use legacy websockets.connect API — the new asyncio API times out
+            # on this server (Cloudflare blocks the upgrade from the new handshake
+            # implementation but passes the legacy one with ping_interval=None).
+            import websockets  # type: ignore
 
-            # Attempt connection with hard timeout
-            try:
-                ws_cm = await asyncio.wait_for(
-                    ws_connect(_AISSTREAM_URL).__aenter__(),
-                    timeout=_WS_OPEN_TIMEOUT,
-                )
-            except (asyncio.TimeoutError, TimeoutError) as exc:
-                raise asyncio.TimeoutError(str(exc))
-
-            async with ws_cm as ws:
+            async with websockets.connect(
+                _AISSTREAM_URL,
+                open_timeout=_WS_OPEN_TIMEOUT,
+                ping_interval=None,
+            ) as ws:
                 await ws.send(subscribe_msg)
                 deadline = time.monotonic() + _COLLECT_SECS
 
