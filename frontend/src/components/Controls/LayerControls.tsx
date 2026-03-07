@@ -12,14 +12,14 @@ import LayerToggle from './LayerToggle';
 import { useGlobeStore } from '../../stores/globeStore';
 
 const LAYER_CONFIG = [
-  { key: 'flights',    label: 'Flights',    color: '#ffee00', type: 'flight',    functional: true,  shortcut: '1' },
-  { key: 'news',       label: 'News',       color: '#00f0ff', type: 'news',      functional: true,  shortcut: '2' },
-  { key: 'disasters',  label: 'Disasters',  color: '#ff6600', type: 'disaster',  functional: true,  shortcut: '3' },
-  { key: 'ships',      label: 'Ships',      color: '#00ff88', type: 'ship',      functional: true,  shortcut: '4' },
-  { key: 'satellites', label: 'Satellites', color: '#ff00aa', type: 'satellite', functional: false, shortcut: null },
-  { key: 'conflicts',  label: 'Conflicts',  color: '#ff0044', type: 'conflict',  functional: false, shortcut: null },
-  { key: 'traffic',    label: 'Traffic',    color: '#aa44ff', type: 'traffic',   functional: false, shortcut: null },
-  { key: 'cameras',    label: 'Cameras',    color: '#888888', type: 'camera',    functional: false, shortcut: null },
+  { key: 'flights',    label: '✈ Flights',    color: '#ffee00', type: 'flight',    functional: true,  shortcut: '1' },
+  { key: 'news',       label: '📰 News',       color: '#00f0ff', type: 'news',      functional: true,  shortcut: '2' },
+  { key: 'disasters',  label: '🌋 Disasters',  color: '#ff6600', type: 'disaster',  functional: true,  shortcut: '3' },
+  { key: 'ships',      label: '🚢 Ships',      color: '#00ff88', type: 'ship',      functional: true,  shortcut: '4' },
+  { key: 'satellites', label: '🛰 Satellites', color: '#ff00aa', type: 'satellite', functional: false, shortcut: null },
+  { key: 'conflicts',  label: '⚔ Conflicts',  color: '#ff0044', type: 'conflict',  functional: false, shortcut: null },
+  { key: 'traffic',    label: '🚦 Traffic',    color: '#aa44ff', type: 'traffic',   functional: false, shortcut: null },
+  { key: 'cameras',    label: '📷 Cameras',    color: '#888888', type: 'camera',    functional: false, shortcut: null },
 ] as const;
 
 type LayerKey = (typeof LAYER_CONFIG)[number]['key'];

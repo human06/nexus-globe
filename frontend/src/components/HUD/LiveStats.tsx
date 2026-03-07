@@ -37,6 +37,7 @@ const TIER_SOURCES = [
   ['event_registry'],                                                      // Tier 2
   ['gdelt'],                                                               // Tier 3
 ];
+const TIER_LABELS = ['RSS', 'ER', 'GDELT'];
 
 interface AIStatus {
   status: 'ok' | 'error' | 'unconfigured';
@@ -46,6 +47,7 @@ interface AIStatus {
 export default function LiveStats() {
   const events = useGlobeStore((s) => s.events);
   const [aiStatus, setAiStatus] = useState<AIStatus | null>(null);
+  const [newsExpanded, setNewsExpanded] = useState(false);
 
   // Poll AI status endpoint
   useEffect(() => {
@@ -68,9 +70,18 @@ export default function LiveStats() {
   // Count events per type
   const counts: Record<string, number> = {};
   const newsSources = new Set<string>();
+  const tierCounts = [0, 0, 0];
   for (const ev of events.values()) {
     counts[ev.type] = (counts[ev.type] ?? 0) + 1;
-    if (ev.type === 'news') newsSources.add(ev.source);
+    if (ev.type === 'news') {
+      newsSources.add(ev.source);
+      for (let i = 0; i < TIER_SOURCES.length; i++) {
+        if (TIER_SOURCES[i].some((src) => ev.source === src || ev.source.startsWith(src))) {
+          tierCounts[i]++;
+          break;
+        }
+      }
+    }
   }
 
   // Count which news tiers are online (have at least one event)
@@ -109,18 +120,54 @@ export default function LiveStats() {
           fontSize: '0.8rem',
         }}
       >
-        {active.map((type) => (
-          <span
-            key={type}
-            style={{
-              color: LAYER_COLORS[type] ?? '#fff',
-              textShadow: `0 0 6px ${LAYER_COLORS[type] ?? '#fff'}`,
-            }}
-          >
-            {LAYER_ICONS[type] ?? '●'} {(counts[type] ?? 0).toLocaleString()}
-          </span>
-        ))}
+        {active.map((type) =>
+          type === 'news' ? (
+            <button
+              key={type}
+              onClick={() => setNewsExpanded((x) => !x)}
+              title="Toggle news source breakdown"
+              style={{
+                background: 'none',
+                border: 'none',
+                padding: 0,
+                cursor: 'pointer',
+                color: LAYER_COLORS[type] ?? '#fff',
+                textShadow: `0 0 6px ${LAYER_COLORS[type] ?? '#fff'}`,
+                fontFamily: 'var(--font-mono)',
+                fontSize: '0.8rem',
+                pointerEvents: 'auto',
+              }}
+            >
+              {LAYER_ICONS[type] ?? '●'} {(counts[type] ?? 0).toLocaleString()}
+            </button>
+          ) : (
+            <span
+              key={type}
+              style={{
+                color: LAYER_COLORS[type] ?? '#fff',
+                textShadow: `0 0 6px ${LAYER_COLORS[type] ?? '#fff'}`,
+              }}
+            >
+              {LAYER_ICONS[type] ?? '●'} {(counts[type] ?? 0).toLocaleString()}
+            </span>
+          ),
+        )}
       </div>
+
+      {/* News source breakdown (expandable) */}
+      {newsExpanded && (counts['news'] ?? 0) > 0 && (
+        <div
+          style={{
+            fontFamily: 'var(--font-mono)',
+            fontSize: '0.6rem',
+            color: 'rgba(0,240,255,0.65)',
+            letterSpacing: '0.05em',
+            textAlign: 'right',
+          }}
+        >
+          {TIER_LABELS.map((label, i) => `${tierCounts[i]} ${label}`).join(' • ')}
+        </div>
+      )}
 
       {/* News tiers status */}
       {newsSources.size > 0 && (
