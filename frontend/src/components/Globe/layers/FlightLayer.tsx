@@ -18,6 +18,8 @@ import * as THREE from 'three';
 import { useGlobe } from '../GlobeContext';
 import { useLayerData } from '../../../hooks/useLayerData';
 import { useGlobeStore } from '../../../stores/globeStore';
+import { usePointMarkerStore } from '../pointMarkerStore';
+import type { ArcDatum, RingDatum } from '../pointMarkerStore';
 import type { GlobeEvent } from '../../../types/events';
 
 // ── Airplane icon factory ─────────────────────────────────────────────────
@@ -145,6 +147,9 @@ export default function FlightLayer() {
   const selectEvent     = useGlobeStore((s) => s.selectEvent);
   const selectedEventId = useGlobeStore((s) => s.selectedEventId);
 
+  const setArcs  = usePointMarkerStore((s) => s.setArcs);
+  const setRings = usePointMarkerStore((s) => s.setRings);
+
   // ── Markers ──────────────────────────────────────────────────────────────
   useEffect(() => {
     if (!globe) return;
@@ -230,48 +235,49 @@ export default function FlightLayer() {
 
   // ── Pulsing ring + projection arc for selected flight ────────────────────
   useEffect(() => {
-    if (!globe) return;
-
     const sel = selectedEventId
       ? flights.find((ev) => ev.id === selectedEventId) ?? null
       : null;
 
-    // Pulsing ring around selected aircraft
-    globe
-      .ringsData(sel ? [sel] : [])
-      .ringLat((d: object) => (d as GlobeEvent).latitude)
-      .ringLng((d: object) => (d as GlobeEvent).longitude)
-      .ringMaxRadius(3.5)
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      .ringColor((() => (t: number) => `rgba(0,229,255,${Math.max(0, 1 - t * 1.4)})`) as any)
-      .ringPropagationSpeed(1.5)
-      .ringRepeatPeriod(900);
+    // Pulsing ring around selected aircraft via shared store
+    if (sel) {
+      const ring: RingDatum = {
+        lat:       sel.latitude,
+        lng:       sel.longitude,
+        maxRadius: 3.5,
+        color:     (t: number) => `rgba(0,229,255,${Math.max(0, 1 - t * 1.4)})`,
+        speed:     1.5,
+        period:    900,
+        layerKey:  'flight' as const,
+      };
+      setRings('flight', [ring]);
+    } else {
+      setRings('flight', []);
+    }
 
     // Dashed projection arc: current position → 2-hour forward look
     if (sel && sel.heading != null && sel.speed != null && sel.speed > 20) {
-      // speed is stored as km/h (normalised in flightradar.py)
       const distKm = sel.speed * 2; // 2-hour projection
       const [endLat, endLng] = projectForward(
         sel.latitude, sel.longitude, sel.heading, distKm,
       );
-      globe
-        .arcsData([sel])
-        .arcStartLat((d: object) => (d as GlobeEvent).latitude)
-        .arcStartLng((d: object) => (d as GlobeEvent).longitude)
-        .arcEndLat(() => endLat)
-        .arcEndLng(() => endLng)
-        .arcAltitudeAutoScale(0.3)
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        .arcColor((() => ['rgba(0,229,255,0.15)', 'rgba(0,229,255,0.85)']) as any)
-        .arcStroke(0.5)
-        .arcDashLength(0.35)
-        .arcDashGap(0.15)
-        .arcDashAnimateTime(1800);
+      const arc: ArcDatum = {
+        startLat: sel.latitude,
+        startLng: sel.longitude,
+        endLat,
+        endLng,
+        color:    ['rgba(0,229,255,0.15)', 'rgba(0,229,255,0.85)'],
+        stroke:   0.5,
+        altitude: 0.15,  // fixed moderate altitude for projection arc
+        dashLen:  0.35,
+        dashGap:  0.15,
+        animTime: 1800,
+        layerKey: 'flight_sel' as const,
+      };
+      setArcs('flight_sel', [arc]);
     } else {
-      globe.arcsData([]);
+      setArcs('flight_sel', []);
     }
-  }, [globe, flights, selectedEventId]);
-
-  return null;
+  }, [globe, flights, selectedEventId, setArcs, setRings]);
 }
 

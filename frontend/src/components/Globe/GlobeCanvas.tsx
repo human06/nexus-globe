@@ -15,7 +15,11 @@ import FlightLayer from './layers/FlightLayer';
 import NewsLayer from './layers/NewsLayer';
 import DisasterLayer from './layers/DisasterLayer';
 import ShipLayer from './layers/ShipLayer';
+import SatelliteLayer from './layers/SatelliteLayer';
+import ConflictLayer from './layers/ConflictLayer';
+import TrafficLayer from './layers/TrafficLayer';
 import HtmlLayerSync from './HtmlLayerSync';
+import { PointsLayerSync, ArcsLayerSync, RingsLayerSync } from './PointArcsRingsSync';
 import { useGlobeStore } from '../../stores/globeStore';
 
 // Auto-rotate speed (OrbitControls unit: full rotations per minute × 2)
@@ -200,8 +204,15 @@ export default function GlobeCanvas() {
       {globeInstance && <NewsLayer />}
       {globeInstance && <DisasterLayer />}
       {globeInstance && <ShipLayer />}
+      {globeInstance && <SatelliteLayer />}
+      {globeInstance && <ConflictLayer />}
+      {globeInstance && <TrafficLayer />}
       {/* Single component that owns globe.htmlElementsData(): merges news + disaster + ship */}
       {globeInstance && <HtmlLayerSync />}
+      {/* Single components that own globe.pointsData/arcsData/ringsData slots */}
+      {globeInstance && <PointsLayerSync />}
+      {globeInstance && <ArcsLayerSync />}
+      {globeInstance && <RingsLayerSync />}
     </GlobeContext.Provider>
   );
 }
