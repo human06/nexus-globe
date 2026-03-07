@@ -416,3 +416,56 @@ async def ai_status():
     analyzer = get_analyzer()
     return analyzer.get_status()
 
+
+# ── /api/heatmap ──────────────────────────────────────────────────────────────
+
+@router.get("/heatmap")
+async def heatmap(
+    resolution: int = Query(
+        default=4,
+        ge=2,
+        le=6,
+        description="H3 resolution (2=continent, 6=city-block)",
+    ),
+    types: str | None = Query(
+        default=None,
+        description="Comma-separated event types to include, e.g. 'news,conflict'",
+    ),
+    time: str = Query(
+        default="24h",
+        description="Time window: 1h, 6h, 12h, 24h, 48h, 7d",
+    ),
+):
+    """
+    Return H3 hexagonal heatmap of event density.
+
+    Aggregates live events into an H3 hex grid at the requested resolution.
+    Results are cached in Redis for 60 seconds to keep response times fast.
+
+    Response:
+    ```json
+    {
+      "resolution": 4,
+      "hexagons": [
+        { "h3_index": "842a100ffffffff", "lat": 51.5, "lng": -0.1,
+          "count": 23, "max_severity": 5, "types": {"news": 15, "conflict": 8} }
+      ]
+    }
+    ```
+
+    Story 3.6 — Heatmap Data Aggregation Service.
+    """
+    from app.services.heatmap_service import get_heatmap
+
+    type_list = [t.strip() for t in types.split(",") if t.strip()] if types else None
+
+    valid_windows = {"1h", "6h", "12h", "24h", "48h", "7d"}
+    if time not in valid_windows:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid time window '{time}'. Must be one of: {sorted(valid_windows)}",
+        )
+
+    return await get_heatmap(resolution=resolution, types=type_list, time_window=time)
+
+
