@@ -40,6 +40,7 @@ from app.db.redis import get_layer_snapshot, subscribe_channel
 logger = logging.getLogger(__name__)
 
 HEARTBEAT_INTERVAL = 30  # seconds between pings
+MAX_SNAPSHOT_EVENTS = 2000  # cap per-layer snapshot; each flight ~400 B → ~800 KB total
 
 
 class ConnectionManager:
@@ -172,6 +173,8 @@ class ConnectionManager:
         try:
             raw_events = await get_layer_snapshot(layer)
             if raw_events:
+                # Limit snapshot size to avoid giant WS frames that freeze the event loop
+                raw_events = raw_events[:MAX_SNAPSHOT_EVENTS]
                 events = [json.loads(raw) for raw in raw_events]
             else:
                 # Redis cold — query DB directly for non-expired events

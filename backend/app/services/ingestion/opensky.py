@@ -1,8 +1,11 @@
 """OpenSky Network ADS-B flight ingestion service — Story 1.5.
 
-Polls https://opensky-network.org/api/states/all every 10 seconds,
+Polls https://opensky-network.org/api/states/all every 15 seconds,
 normalises aircraft state vectors into GlobeEvents, and hands them to
 the base class for upsert + Redis publish.
+
+When the OpenSky API returns 429 (IP rate-limited), the service falls back
+to a simulated demo fleet so flights always appear on the globe.
 
 State vector index map (OpenSky docs):
     0  icao24           — unique 24-bit ICAO transponder address (hex)
@@ -26,7 +29,10 @@ State vector index map (OpenSky docs):
 from __future__ import annotations
 
 import asyncio
+import math
+import random
 import re
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from collections import deque
 from typing import Any
@@ -50,28 +56,143 @@ _MILITARY_RE = re.compile(
 TRAIL_MAX = 10
 
 # Aircraft considered "expired" after this many seconds without update
-FLIGHT_TTL_SECONDS = 300  # 5 minutes — must survive a full upsert cycle
+FLIGHT_TTL_SECONDS = 1800  # 30 minutes — survives rate-limit cooldowns & restarts
 
-# Retry backoff for failed requests (seconds)
-_BACKOFF = [1, 2, 5, 10, 30]
+# Demo flights get a short TTL so they disappear quickly when real data arrives
+DEMO_FLIGHT_TTL_SECONDS = 90
+
+# How long (seconds) to pause all requests after a 429
+_RATE_LIMIT_COOLDOWN = 120
+
+# ── Demo fleet configuration ──────────────────────────────────────────────────
+# (center_lat, center_lng, spread_lat, spread_lng, count) — major corridors
+_DEMO_CORRIDORS = [
+    (52,  -30,  8, 28, 50),   # North Atlantic
+    (35,  145, 10, 18, 40),   # East Asia / Japan
+    (50,   10, 12, 22, 60),   # Europe
+    (35,  -96, 10, 22, 55),   # US domestic
+    (20,   80, 10, 25, 35),   # South Asia
+    (25,   52,  8, 16, 30),   # Middle East
+    (-25,  25, 10, 22, 20),   # Africa
+    (-30, 145,  6, 12, 20),   # Australia
+    (-5,  -55,  8, 22, 20),   # South America
+    (35, -120,  8, 14, 25),   # US West Coast
+    (55,   80,  6, 30, 20),   # Russia / Siberia
+]
+_DEMO_CALLSIGN_PREFIXES = [
+    "UAL", "DAL", "AAL", "SWA", "BAW", "AFR", "DLH", "KLM",
+    "EZY", "RYR", "UAE", "SIA", "CCA", "CSN", "JAL", "ANA",
+    "QFA", "ETH", "THA", "TRK", "FIN", "TAP", "IBE", "AZA",
+]
+
+
+@dataclass
+class _DemoAircraft:
+    icao24: str
+    callsign: str
+    lat: float
+    lng: float
+    heading: float          # degrees clockwise from north
+    speed_kmh: float
+    altitude_m: float
+
+    def tick(self, dt_seconds: float) -> None:
+        """Advance position by one poll interval."""
+        dt_h = dt_seconds / 3600.0
+        d_km = self.speed_kmh * dt_h
+        heading_rad = math.radians(self.heading)
+        lat_r = math.radians(self.lat)
+        self.lat += (d_km / 111.0) * math.cos(heading_rad)
+        cos_lat = math.cos(lat_r) or 1e-9
+        self.lng += (d_km / (111.0 * cos_lat)) * math.sin(heading_rad)
+        # Clamp lat, wrap lng
+        self.lat = max(-85.0, min(85.0, self.lat))
+        self.lng = ((self.lng + 180.0) % 360.0) - 180.0
+
+    def to_state_vector(self) -> list:
+        """Return an OpenSky-format state vector list (indices 0-16)."""
+        return [
+            self.icao24,        # 0  icao24
+            self.callsign,      # 1  callsign
+            "Demo",             # 2  origin_country
+            None,               # 3  time_position
+            None,               # 4  last_contact
+            self.lng,           # 5  longitude
+            self.lat,           # 6  latitude
+            self.altitude_m,    # 7  baro_altitude
+            False,              # 8  on_ground
+            self.speed_kmh / 3.6,  # 9  velocity (m/s)
+            self.heading,       # 10 true_track
+            0.0,                # 11 vertical_rate
+            None,               # 12 sensors
+            self.altitude_m,    # 13 geo_altitude
+            None,               # 14 squawk
+            False,              # 15 spi
+            0,                  # 16 position_source (ADS-B)
+        ]
 
 
 class OpenSkyIngestionService(BaseIngestionService):
     """
-    Polls OpenSky every 10 s, parses state vectors, upserts GlobeEvents.
+    Polls OpenSky every 15 s, parses state vectors, upserts GlobeEvents.
 
-    In-memory trail dict keeps the last ``TRAIL_MAX`` positions per ICAO24
-    so the frontend can render the flight path without extra DB queries.
+    Single attempt per cycle (no retry loop).  When a 429 is received the
+    service sets ``_blocked_until`` and skips every subsequent poll cycle
+    until the cooldown expires — this prevents the retry storm that causes
+    prolonged rate-limiting.
+
+    When blocked, ``fetch_raw()`` returns a synthetic demo dataset so the
+    globe always displays live-looking flights even during rate-limit windows.
     """
 
     source_name = "flight"
-    poll_interval_seconds = 10
+    poll_interval_seconds = 15
 
     def __init__(self) -> None:
         super().__init__()
         # icao24 → deque of {"lat", "lng", "alt", "ts"} (most-recent last)
         self._trails: dict[str, deque] = {}
         self._http: httpx.AsyncClient | None = None
+        # Set to a future datetime when a 429 is received; cycles are skipped
+        # until datetime.now() > _blocked_until
+        self._blocked_until: datetime | None = None
+        # Demo fleet — initialised lazily on first blocked poll
+        self._demo_fleet: list[_DemoAircraft] = []
+
+    # ── Demo fleet helpers ────────────────────────────────────────────────────
+
+    def _ensure_demo_fleet(self) -> None:
+        """Build the demo fleet once; subsequent calls are no-ops."""
+        if self._demo_fleet:
+            return
+        rng = random.Random(12345)  # fixed seed → deterministic starting positions
+        idx = 0
+        for (clat, clng, slat, slng, count) in _DEMO_CORRIDORS:
+            for _ in range(count):
+                lat = clat + rng.uniform(-slat, slat)
+                lng = clng + rng.uniform(-slng, slng)
+                lat = max(-85.0, min(85.0, lat))
+                lng = ((lng + 180.0) % 360.0) - 180.0
+                prefix = rng.choice(_DEMO_CALLSIGN_PREFIXES)
+                callsign = f"{prefix}{rng.randint(1, 9999):04d}"
+                self._demo_fleet.append(_DemoAircraft(
+                    icao24=f"demo{idx:04x}",
+                    callsign=callsign,
+                    lat=lat,
+                    lng=lng,
+                    heading=rng.uniform(0, 360),
+                    speed_kmh=rng.uniform(650, 950),
+                    altitude_m=rng.uniform(8000, 12500),
+                ))
+                idx += 1
+        self.logger.info("[opensky] Demo fleet initialised with %d aircraft", len(self._demo_fleet))
+
+    def _tick_demo_fleet(self) -> dict:
+        """Advance all demo aircraft one poll interval and return fake API response."""
+        self._ensure_demo_fleet()
+        for ac in self._demo_fleet:
+            ac.tick(self.poll_interval_seconds)
+        return {"states": [ac.to_state_vector() for ac in self._demo_fleet], "_demo": True}
 
     # ── HTTP client (lazy, shared across polls) ───────────────────────────────
 
@@ -91,35 +212,50 @@ class OpenSkyIngestionService(BaseIngestionService):
 
     async def fetch_raw(self) -> Any:
         """
-        GET OpenSky states/all with retry + exponential backoff.
-        Returns the parsed JSON dict or None on persistent failure.
-        """
-        for attempt, wait in enumerate([0] + _BACKOFF, start=1):
-            if wait:
-                await asyncio.sleep(wait)
-            try:
-                resp = await self._client().get(OPENSKY_URL)
-                if resp.status_code == 429:
-                    self.logger.warning(
-                        "[opensky] Rate-limited (429) — attempt %d", attempt
-                    )
-                    continue
-                resp.raise_for_status()
-                data = resp.json()
-                states = data.get("states") or []
-                self.logger.info(
-                    "[opensky] Fetched %d state vectors", len(states)
-                )
-                return data
-            except httpx.TimeoutException:
-                self.logger.warning("[opensky] Timeout on attempt %d", attempt)
-            except httpx.HTTPStatusError as exc:
-                self.logger.warning("[opensky] HTTP %s on attempt %d", exc.response.status_code, attempt)
-            except Exception as exc:
-                self.logger.warning("[opensky] Fetch error attempt %d: %s", attempt, exc)
+        Single GET attempt against OpenSky states/all per scheduled cycle.
 
-        self.logger.error("[opensky] All fetch attempts failed — skipping cycle")
-        return None
+        On 429:  records a cooldown timestamp and returns demo data —
+                 no retry loop that would keep hammering the API.
+        Returns the parsed JSON dict on success (or demo dict when blocked).
+        """
+        now = datetime.now(timezone.utc)
+
+        # Still inside a rate-limit cooldown window — serve demo data
+        if self._blocked_until and now < self._blocked_until:
+            remaining = int((self._blocked_until - now).total_seconds())
+            self.logger.info(
+                "[opensky] Cooling down — %ds remaining, serving demo flights", remaining
+            )
+            return self._tick_demo_fleet()
+
+        try:
+            resp = await self._client().get(OPENSKY_URL)
+
+            if resp.status_code == 429:
+                self._blocked_until = now + timedelta(seconds=_RATE_LIMIT_COOLDOWN)
+                self.logger.warning(
+                    "[opensky] Rate-limited (429) — backing off %ds until %s, serving demo flights",
+                    _RATE_LIMIT_COOLDOWN,
+                    self._blocked_until.strftime("%H:%M:%S UTC"),
+                )
+                return self._tick_demo_fleet()
+
+            resp.raise_for_status()
+            data = resp.json()
+            states = data.get("states") or []
+            self.logger.info("[opensky] Fetched %d real state vectors", len(states))
+            # Clear any stale cooldown on success
+            self._blocked_until = None
+            return data
+
+        except httpx.TimeoutException:
+            self.logger.warning("[opensky] Request timed out — serving demo flights")
+        except httpx.HTTPStatusError as exc:
+            self.logger.warning("[opensky] HTTP %s — serving demo flights", exc.response.status_code)
+        except Exception as exc:
+            self.logger.warning("[opensky] Fetch error — serving demo flights: %s", exc)
+
+        return self._tick_demo_fleet()
 
     # ── normalize ────────────────────────────────────────────────────────────
 
@@ -128,8 +264,10 @@ class OpenSkyIngestionService(BaseIngestionService):
         if not raw or not raw.get("states"):
             return []
 
+        is_demo = bool(raw.get("_demo"))
         now = datetime.now(timezone.utc)
-        expires_at = now + timedelta(seconds=FLIGHT_TTL_SECONDS)
+        ttl = DEMO_FLIGHT_TTL_SECONDS if is_demo else FLIGHT_TTL_SECONDS
+        expires_at = now + timedelta(seconds=ttl)
         events: list[dict] = []
 
         for sv in raw["states"]:
@@ -178,7 +316,7 @@ class OpenSkyIngestionService(BaseIngestionService):
                 "event_type":  "flight",
                 "category":    "aviation",
                 "title":       callsign,
-                "description": f"{callsign} — {origin_country}",
+                "description": f"{callsign} — {origin_country}" + (" (demo)" if is_demo else ""),
                 "latitude":    latitude,
                 "longitude":   longitude,
                 "altitude_m":  altitude_m,
@@ -195,14 +333,16 @@ class OpenSkyIngestionService(BaseIngestionService):
                     "on_ground":      on_ground,
                     "squawk":         squawk,
                     "baro_altitude":  baro_alt,
+                    "demo":           is_demo,
                 },
                 "trail":       trail,
                 "expires_at":  expires_at,
             })
 
         self.logger.info(
-            "[opensky] Normalised %d flights (from %d state vectors)",
+            "[opensky] Normalised %d %s flights (from %d state vectors)",
             len(events),
+            "demo" if is_demo else "real",
             len(raw["states"]),
         )
         return events

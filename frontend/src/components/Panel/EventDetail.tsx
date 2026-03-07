@@ -88,9 +88,35 @@ export default function EventDetail({ event }: { event: GlobeEvent }) {
       {/* Flight-specific fields */}
       {event.type === 'flight' && (
         <div style={{ marginBottom: 8, borderBottom: '1px solid rgba(0,240,255,0.08)', paddingBottom: 8 }}>
-          <Row label="CALLSIGN" value={String(meta?.callsign ?? event.title).trim() || '—'} />
+          {/* Route banner — show only when we have origin or destination */}
+          {(meta?.origin || meta?.destination) && (
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: 8,
+              margin: '6px 0 10px',
+              padding: '5px 10px',
+              background: 'rgba(0,240,255,0.06)',
+              border: '1px solid rgba(0,240,255,0.18)',
+              borderRadius: 3,
+              fontFamily: 'var(--font-display)',
+              fontSize: '0.9rem',
+              letterSpacing: '0.15em',
+            }}>
+              <span style={{ color: '#e0f4ff', opacity: 0.7 }}>{String(meta.origin || '···')}</span>
+              <svg width="20" height="10" viewBox="0 0 20 10" fill="none" stroke="var(--neon-cyan)" strokeWidth="1.5">
+                <line x1="0" y1="5" x2="16" y2="5" />
+                <polyline points="11,1 17,5 11,9" />
+              </svg>
+              <span style={{ color: '#e0f4ff', opacity: 0.7 }}>{String(meta.destination || '···')}</span>
+            </div>
+          )}
+          <Row label="FLIGHT"   value={String(meta?.number || meta?.callsign || event.title).trim() || '—'} />
+          <Row label="CALLSIGN" value={String(meta?.callsign ?? '—').trim() || '—'} />
+          <Row label="AIRCRAFT" value={String(meta?.aircraft || '—').trim()} />
+          <Row label="REG"      value={String(meta?.registration || '—').trim()} />
           <Row label="ICAO24"   value={String(meta?.icao24 ?? '—').toUpperCase()} />
-          <Row label="COUNTRY"  value={String(meta?.origin_country ?? meta?.country ?? '—')} />
         </div>
       )}
 

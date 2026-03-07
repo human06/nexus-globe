@@ -64,11 +64,11 @@ function AppInner() {
       </div>
 
       {/* Layer 20 — interactive panels */}
-      <div style={{ position: 'fixed', top: 0, left: 0, height: '100%', zIndex: 20 }}>
+      <div style={{ position: 'fixed', top: 0, left: 0, height: '100%', zIndex: 20, pointerEvents: 'none' }}>
         <LayerControls />
       </div>
 
-      <div style={{ position: 'fixed', top: 0, right: 0, height: '100%', zIndex: 20 }}>
+      <div style={{ position: 'fixed', top: 0, right: 0, height: '100%', zIndex: 20, pointerEvents: 'none' }}>
         <SidePanel />
       </div>
     </div>

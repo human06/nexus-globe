@@ -19,25 +19,81 @@ import { useLayerData } from '../../../hooks/useLayerData';
 import { useGlobeStore } from '../../../stores/globeStore';
 import type { GlobeEvent } from '../../../types/events';
 
-// ── Arrow geometry factory ─────────────────────────────────────────────────
+// ── Airplane icon factory ─────────────────────────────────────────────────
 
 /**
- * A thin 4-sided cone (diamond arrow) oriented so its tip points +X (East).
- * Globe.GL applies local-space rotations to match heading on the sphere.
+ * Module-level CanvasTexture cache — created once, shared across all meshes.
+ * Two variants: normal (neon yellow) and dim (on-ground aircraft).
  */
-function makeArrow(dim: boolean): THREE.Mesh {
-  const g = new THREE.ConeGeometry(0.25, 0.7, 4);
-  // Rotate tip to point in +Z (forward) in local space; globe.gl will
-  // rotate it onto the sphere surface.
-  g.rotateX(Math.PI / 2);
-  const m = new THREE.MeshLambertMaterial({
-    color:              dim ? 0x886600 : 0xffee00,
-    emissive:           dim ? 0x221100 : 0xff9900,
-    emissiveIntensity:  dim ? 0.05 : 0.5,
-    transparent:        true,
-    opacity:            dim ? 0.35 : 0.95,
+let _texNormal: THREE.CanvasTexture | null = null;
+let _texDim:    THREE.CanvasTexture | null = null;
+
+function buildAirplaneTexture(dim: boolean): THREE.CanvasTexture {
+  const SIZE = 64;
+  const canvas = document.createElement('canvas');
+  canvas.width  = SIZE;
+  canvas.height = SIZE;
+  const ctx = canvas.getContext('2d')!;
+  ctx.clearRect(0, 0, SIZE, SIZE);
+  ctx.save();
+  ctx.translate(SIZE / 2, SIZE / 2);
+
+  const S = SIZE * 0.36; // shape scale
+  ctx.fillStyle = dim ? '#886600' : '#ffee00';
+  if (!dim) {
+    ctx.shadowColor = '#ff9900';
+    ctx.shadowBlur  = 8;
+  }
+
+  // Top-down airplane silhouette.
+  // Nose points toward canvas top (local Y- in canvas = local +Y in Three.js
+  // PlaneGeometry, which maps to the globe-surface North direction after lookAt).
+  ctx.beginPath();
+  ctx.moveTo(0,          -S);          // nose
+  ctx.lineTo( S * 0.13,  -S * 0.15);   // right fuselage shoulder
+  ctx.lineTo( S * 0.90,   S * 0.18);   // right wing tip
+  ctx.lineTo( S * 0.52,   S * 0.42);   // right wing trailing edge
+  ctx.lineTo( S * 0.16,   S * 0.28);   // right fuselage / tail root
+  ctx.lineTo( S * 0.40,   S * 0.82);   // right horizontal stabiliser tip
+  ctx.lineTo( S * 0.18,   S * 0.92);   // right stabiliser trailing corner
+  ctx.lineTo(0,            S * 0.72);  // tail centre
+  ctx.lineTo(-S * 0.18,   S * 0.92);   // left stabiliser trailing corner
+  ctx.lineTo(-S * 0.40,   S * 0.82);   // left horizontal stabiliser tip
+  ctx.lineTo(-S * 0.16,   S * 0.28);   // left fuselage / tail root
+  ctx.lineTo(-S * 0.52,   S * 0.42);   // left wing trailing edge
+  ctx.lineTo(-S * 0.90,   S * 0.18);   // left wing tip
+  ctx.lineTo(-S * 0.13,  -S * 0.15);   // left fuselage shoulder
+  ctx.closePath();
+  ctx.fill();
+  ctx.restore();
+
+  const tex = new THREE.CanvasTexture(canvas);
+  if (dim) _texDim    = tex;
+  else     _texNormal = tex;
+  return tex;
+}
+
+function getAirplaneTexture(dim: boolean): THREE.CanvasTexture {
+  if (dim) return _texDim    ?? buildAirplaneTexture(true);
+  return         _texNormal  ?? buildAirplaneTexture(false);
+}
+
+/**
+ * Flat PlaneGeometry mesh with a top-down airplane texture.
+ * The plane lies in XY (face normal = +Z).
+ * lookAt(0,0,0) makes +Z point away from the globe centre (outward),
+ * so the icon is always visible from outside.
+ */
+function makeAirplane(dim: boolean): THREE.Mesh {
+  const geo = new THREE.PlaneGeometry(0.9, 0.9);
+  const mat = new THREE.MeshBasicMaterial({
+    map:         getAirplaneTexture(dim),
+    transparent: true,
+    opacity:     dim ? 0.45 : 1.0,
+    depthWrite:  false,
+    side:        THREE.DoubleSide,
   });
-  return new THREE.Mesh(g, m);
+  return new THREE.Mesh(geo, mat);
 }
 
 // ── Tooltip template ───────────────────────────────────────────────────────
@@ -79,19 +135,34 @@ export default function FlightLayer() {
     globe
       .customLayerData(data)
       .customThreeObject((d: object) => {
-        const ev = d as GlobeEvent;
-        return makeArrow((ev.altitude ?? 999) < 50);
+        const ev  = d as GlobeEvent;
+        const dim = (ev.altitude ?? 999) < 50; // altitude in metres
+        return makeAirplane(dim);
       })
       .customThreeObjectUpdate((obj: object, d: object) => {
         const ev   = d as GlobeEvent;
         const mesh = obj as THREE.Mesh;
-        const mat  = mesh.material as THREE.MeshLambertMaterial;
+        const mat  = mesh.material as THREE.MeshBasicMaterial;
         const dim  = (ev.altitude ?? 999) < 50;
-        // Rotate arrowhead to heading direction (local Z → heading angle)
-        mesh.rotation.y = (-(ev.heading ?? 0) * Math.PI) / 180;
-        mat.opacity            = dim ? 0.35 : 0.95;
-        mat.emissiveIntensity  = dim ? 0.05 : 0.5;
-        mat.needsUpdate        = true;
+
+        // ── Position on globe surface ─────────────────────────────────────
+        // globe.getCoords(lat, lng, altFraction) → {x, y, z}
+        const altFrac = Math.max(0, (ev.altitude ?? 0) / 6_371_000) + 0.002;
+        const { x, y, z } = (globe as unknown as {
+          getCoords: (lat: number, lng: number, alt: number) => { x: number; y: number; z: number };
+        }).getCoords(ev.latitude, ev.longitude, altFrac);
+        mesh.position.set(x, y, z);
+
+        // ── Orient: face outward, rotate by heading ───────────────────────
+        // lookAt(0,0,0) → local -Z points toward globe centre, +Z outward.
+        // The PlaneGeometry face normal is +Z, so it faces the camera/outside.
+        // Canvas top (nose) = Three.js local +Y ≈ North on the sphere surface.
+        // rotateZ(-heading) turns the nose from North to the actual heading.
+        mesh.lookAt(0, 0, 0);
+        mesh.rotateZ((-(ev.heading ?? 0) * Math.PI) / 180);
+
+        mat.opacity     = dim ? 0.45 : 1.0;
+        mat.needsUpdate = true;
       })
       .customLayerLabel((d: object) => buildLabel(d as GlobeEvent))
       .onCustomLayerClick((d: object) => {

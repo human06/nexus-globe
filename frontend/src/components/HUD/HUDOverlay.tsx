@@ -92,9 +92,60 @@ export default function HUDOverlay() {
               : 'Offline'}
           </div>
           <LiveStats />
+
+          {/* ── Play / Pause auto-rotation ── */}
+          <RotateToggle />
         </div>
       </div>
     </div>
+  );
+}
+
+// ── Extracted button component so it can read from the store cleanly ──────────
+function RotateToggle() {
+  const isAutoRotating = useGlobeStore((s) => s.isAutoRotating);
+  const toggleAutoRotate = useGlobeStore((s) => s.toggleAutoRotate);
+
+  return (
+    <button
+      onClick={toggleAutoRotate}
+      title={isAutoRotating ? 'Pause rotation' : 'Resume rotation'}
+      style={{
+        pointerEvents: 'auto',
+        marginTop: '4px',
+        alignSelf: 'flex-end',
+        background: 'rgba(0,0,0,0.55)',
+        border: `1px solid ${isAutoRotating ? 'var(--neon-cyan)' : 'rgba(0,240,255,0.25)'}`,
+        borderRadius: '3px',
+        color: isAutoRotating ? 'var(--neon-cyan)' : 'rgba(0,240,255,0.4)',
+        cursor: 'pointer',
+        display: 'flex',
+        alignItems: 'center',
+        gap: '5px',
+        fontFamily: 'var(--font-mono)',
+        fontSize: '0.68rem',
+        letterSpacing: '0.1em',
+        padding: '3px 8px',
+        textTransform: 'uppercase',
+        transition: 'border-color 0.2s, color 0.2s',
+        boxShadow: isAutoRotating ? '0 0 6px rgba(0,240,255,0.3)' : 'none',
+      }}
+    >
+      {/* SVG icons keep bundle tiny, no icon library needed */}
+      {isAutoRotating ? (
+        // Pause — two vertical bars
+        <svg width="10" height="11" viewBox="0 0 10 11" fill="currentColor">
+          <rect x="1" y="1" width="3" height="9" rx="1" />
+          <rect x="6" y="1" width="3" height="9" rx="1" />
+        </svg>
+      ) : (
+        // Play — right-pointing triangle
+        <svg width="10" height="11" viewBox="0 0 10 11" fill="currentColor">
+          <polygon points="1,1 9,5.5 1,10" />
+        </svg>
+      )}
+      {isAutoRotating ? 'Pause' : 'Resume'}
+    </button>
   );
 }
 

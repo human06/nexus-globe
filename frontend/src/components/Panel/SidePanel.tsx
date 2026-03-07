@@ -20,6 +20,7 @@ export default function SidePanel() {
         height: '100%',
         display: 'flex',
         alignItems: 'center',
+        pointerEvents: 'none',
       }}
     >
       <div

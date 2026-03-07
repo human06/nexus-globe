@@ -22,9 +22,12 @@ interface GlobeStore {
   selectedEventId: string | null;
   /** WebSocket connection status (driven by useWebSocket hook) */
   wsStatus: WSStatus;
+  /** Whether the globe is auto-rotating */
+  isAutoRotating: boolean;
 
   // Actions
   toggleLayer: (layer: keyof LayerVisibility) => void;
+  toggleAutoRotate: () => void;
   selectEvent: (id: string | null) => void;
   upsertEvents: (incoming: GlobeEvent[]) => void;
   removeEvent: (id: string) => void;
@@ -56,6 +59,10 @@ export const useGlobeStore = create<GlobeStore>((set) => ({
   searchQuery: '',
   selectedEventId: null,
   wsStatus: 'disconnected',
+  isAutoRotating: true,
+
+  toggleAutoRotate: () =>
+    set((state) => ({ isAutoRotating: !state.isAutoRotating })),
 
   toggleLayer: (layer) =>
     set((state) => ({

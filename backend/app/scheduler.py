@@ -6,7 +6,7 @@ import logging
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-from app.services.ingestion.opensky import OpenSkyIngestionService
+from app.services.ingestion.flightradar import FlightRadarIngestionService
 from app.services.ingestion.celestrak import CelesTrakIngestionService
 from app.services.ingestion.gdelt import GDELTIngestionService
 from app.services.ingestion.usgs import USGSIngestionService
@@ -21,7 +21,7 @@ _scheduler: AsyncIOScheduler | None = None
 
 # All ingestion service instances
 _services = [
-    OpenSkyIngestionService(),
+    FlightRadarIngestionService(),
     CelesTrakIngestionService(),
     GDELTIngestionService(),
     USGSIngestionService(),

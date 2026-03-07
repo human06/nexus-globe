@@ -12,6 +12,7 @@ import { useEffect, useRef, useState } from 'react';
 import Globe from 'globe.gl';
 import { GlobeContext, type GlobeInstance } from './GlobeContext';
 import FlightLayer from './layers/FlightLayer';
+import { useGlobeStore } from '../../stores/globeStore';
 
 // Auto-rotate speed (OrbitControls unit: full rotations per minute × 2)
 // We want ~3 min/rotation → 0.33
@@ -23,8 +24,14 @@ export default function GlobeCanvas() {
   const containerRef = useRef<HTMLDivElement>(null);
   const [globeInstance, setGlobeInstance] = useState<GlobeInstance | null>(null);
   const [isLoaded, setIsLoaded] = useState(false);
-  // Use a ref to toggle from event handlers without stale-closure issues
-  const autoRotateRef = useRef(true);
+
+  const isAutoRotating = useGlobeStore((s) => s.isAutoRotating);
+  // Ref so event handlers always see the latest store value without re-registering
+  const isAutoRotatingRef = useRef(isAutoRotating);
+  useEffect(() => { isAutoRotatingRef.current = isAutoRotating; }, [isAutoRotating]);
+
+  // Ref to orbit controls so the store-sync effect can reach it
+  const ctrlRef = useRef<ReturnType<InstanceType<typeof Globe>['controls']> | null>(null);
   const resumeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
@@ -50,23 +57,24 @@ export default function GlobeCanvas() {
 
     // ── Auto-rotation ─────────────────────────────────────────────────────────
     const ctrl = globe.controls();
-    ctrl.autoRotate = true;
+    ctrl.autoRotate = isAutoRotatingRef.current;
     ctrl.autoRotateSpeed = AUTO_ROTATE_SPEED;
     ctrl.enableDamping = true;
     ctrl.dampingFactor = 0.08;
+    ctrlRef.current = ctrl;
 
     // ── Pause / resume on user interaction ────────────────────────────────────
+    // Only resumes after drag if the store says rotation should be on.
     const pauseRotation = () => {
       ctrl.autoRotate = false;
-      autoRotateRef.current = false;
       if (resumeTimerRef.current) clearTimeout(resumeTimerRef.current);
     };
 
     const scheduleResume = () => {
+      if (!isAutoRotatingRef.current) return; // play/pause button is off
       if (resumeTimerRef.current) clearTimeout(resumeTimerRef.current);
       resumeTimerRef.current = setTimeout(() => {
-        ctrl.autoRotate = true;
-        autoRotateRef.current = true;
+        if (isAutoRotatingRef.current) ctrl.autoRotate = true;
       }, RESUME_DELAY_MS);
     };
 
@@ -99,8 +107,6 @@ export default function GlobeCanvas() {
     window.addEventListener('resize', onResize);
 
     // ── Expose instance to child layers via context ───────────────────────────
-    // Globe.GL returns a callable function; wrap in arrow so React doesn't
-    // treat it as a state-updater callback: setState(fn) → fn(prevState).
     setGlobeInstance(() => globe);
 
     return () => {
@@ -113,6 +119,15 @@ export default function GlobeCanvas() {
       globe._destructor();
     };
   }, []); // only run once on mount
+
+  // Sync store isAutoRotating → orbit controls (runs whenever the button is pressed)
+  useEffect(() => {
+    if (!ctrlRef.current) return;
+    ctrlRef.current.autoRotate = isAutoRotating;
+    if (!isAutoRotating && resumeTimerRef.current) {
+      clearTimeout(resumeTimerRef.current);
+    }
+  }, [isAutoRotating]);
 
   return (
     <GlobeContext.Provider value={globeInstance}>

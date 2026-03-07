@@ -79,8 +79,10 @@ async def websocket_endpoint(websocket: WebSocket):
         while True:
             try:
                 data = await websocket.receive_json()
+            except WebSocketDisconnect:
+                raise  # propagate to outer handler
             except Exception:
-                # Malformed message — log and skip
+                # Malformed / non-JSON message — skip
                 logger.debug("Malformed WebSocket message, skipping")
                 continue
 

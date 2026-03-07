@@ -1,8 +1,10 @@
 """Abstract base class for all data ingestion services."""
 from __future__ import annotations
 
+import asyncio
 import logging
 from abc import ABC, abstractmethod
+from datetime import datetime, timezone
 from typing import Any
 
 
@@ -54,7 +56,7 @@ class BaseIngestionService(ABC):
         """
         # Deferred imports to avoid circular deps at module load time
         from app.services.dedup import upsert_events
-        from app.db.redis import publish_event, cache_event
+        from app.db.redis import publish_event, get_redis
 
         self.logger.info("[%s] Starting ingestion cycle", self.source_name)
 
@@ -71,18 +73,36 @@ class BaseIngestionService(ABC):
         # Persist + get back serialised payloads for broadcasting
         upserted = await upsert_events(events)
 
-        # Publish each upserted event to Redis
-        for payload_json, expires_at, event_id in upserted:
+        # Cache events in Redis via pipeline in chunks to yield the event loop
+        # Only publish the most-recent 200 to avoid flooding WS subscribers
+        PUBLISH_LIMIT = 200
+        REDIS_CHUNK = 500
+        try:
+            client = get_redis()
+            for chunk_start in range(0, len(upserted), REDIS_CHUNK):
+                await asyncio.sleep(0)  # yield event loop between chunks
+                chunk = upserted[chunk_start: chunk_start + REDIS_CHUNK]
+                pipe = client.pipeline(transaction=False)
+                for payload_json, expires_at, event_id in chunk:
+                    ttl = 300
+                    if expires_at is not None:
+                        remaining = int((expires_at - datetime.now(timezone.utc)).total_seconds())
+                        ttl = max(remaining, 1)
+                    pipe.setex(f"event:{event_id}", ttl, payload_json)
+                    pipe.sadd(f"layer_ids:{self.source_name}", event_id)
+                    pipe.expire(f"layer_ids:{self.source_name}", ttl + 60)
+                await pipe.execute()
+        except Exception as exc:
+            self.logger.warning("[%s] Redis cache pipeline failed: %s", self.source_name, exc)
+
+        # Publish a sample to the Redis pub/sub channel so live clients get updates
+        await asyncio.sleep(0)
+        for payload_json, _, _ in upserted[:PUBLISH_LIMIT]:
             try:
                 await publish_event(self.source_name, payload_json)
-                await cache_event(
-                    event_id=event_id,
-                    event_type=self.source_name,
-                    payload_json=payload_json,
-                    expires_at=expires_at,
-                )
             except Exception as exc:
                 self.logger.warning("[%s] Redis publish failed: %s", self.source_name, exc)
+                break
 
         self.logger.info(
             "[%s] Ingestion complete — %d/%d events upserted",

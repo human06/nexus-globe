@@ -40,6 +40,7 @@ export default function LayerControls() {
         flexDirection: 'column',
         gap: 2,
         userSelect: 'none',
+        pointerEvents: 'auto',
       }}
     >
       <div
