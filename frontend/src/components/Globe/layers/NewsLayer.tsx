@@ -163,9 +163,23 @@ function buildTooltipHtml(ev: GlobeEvent): string {
   const confirmLine = confirmCount > 1
     ? `<div style="color:#00ff88">✓ ${confirmCount} source${confirmCount > 1 ? 's' : ''}${confirmedBy ? ': ' + confirmedBy : ''}</div>`
     : '';
+
+  // For GDELT events show the source domain ("via reuters.com") instead of "gdelt"
+  const sourceDomain = typeof meta.source_domain === 'string' && meta.source_domain
+    ? meta.source_domain
+    : null;
+  const sourceLabel = sourceDomain ? `via ${sourceDomain}` : ev.source;
+
+  // If this is a URL-slug-derived title we may want to show the geo context below
+  const locationName = typeof meta.location_name === 'string' && meta.location_name ? meta.location_name : null;
+  const locationLine = locationName && ev.source === 'gdelt'
+    ? `<div style="color:rgba(0,240,255,0.38);font-size:9.5px;margin-top:1px">📍 ${locationName}</div>`
+    : '';
+
   return `
     <div style="color:#00f0ff;font-weight:700;margin-bottom:3px">${ev.title.substring(0, 90)}${ev.title.length > 90 ? '…' : ''}</div>
-    <div style="color:rgba(0,240,255,0.55)">${ev.source} · ${timeAgo(ev.timestamp)}</div>
+    <div style="color:rgba(0,240,255,0.55)">${sourceLabel} · ${timeAgo(ev.timestamp)}</div>
+    ${locationLine}
     ${confirmLine}
     <div style="color:rgba(0,240,255,0.45);margin-top:2px">${sevBar} ${ev.severity}/5</div>
     ${aiSummary}

@@ -35,11 +35,13 @@ from __future__ import annotations
 import csv
 import io
 import logging
+import re
 import time
 import zipfile
 from datetime import datetime, timedelta, timezone
 from hashlib import sha256
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 
@@ -113,6 +115,60 @@ def _parse_sqldate(s: str) -> datetime:
 
 def _source_id(url: str) -> str:
     return sha256(url.encode()).hexdigest()[:16]
+
+
+# Common short/stopwords that alone don't form a meaningful headline
+_SLUG_STOPWORDS = frozenset({
+    "the", "a", "an", "in", "on", "at", "to", "of", "and", "or", "for",
+    "by", "as", "is", "it", "up", "be", "vs", "de", "la", "le", "les",
+})
+
+
+def _slug_title(url: str) -> str | None:
+    """
+    Try to extract a human-readable headline from the news article URL slug.
+
+    e.g. ``https://reuters.com/world/ukraine-russia-talks-2026-03-07/``
+    → ``"Ukraine Russia Talks"``
+
+    Returns *None* when the slug doesn't yield ≥ 3 content words.
+    """
+    try:
+        path  = urlparse(url).path.rstrip("/")
+        slug  = path.split("/")[-1]
+
+        # Strip trailing date patterns: 2026-03-07, 20260307
+        slug = re.sub(r"-?\d{4}-\d{2}-\d{2}$", "", slug)
+        slug = re.sub(r"-?\d{8}$", "",  slug)
+        # Strip wire-service ID suffixes like idUSKBN2... or -SB12345
+        slug = re.sub(r"-?id[A-Z]{2}[A-Z0-9]{5,}", "", slug, flags=re.IGNORECASE)
+        slug = re.sub(r"-?[A-Z]{2}[0-9]{5,}",      "", slug, flags=re.IGNORECASE)
+
+        # Split on hyphens / underscores; filter noise tokens
+        words = [
+            w for w in re.split(r"[-_]+", slug)
+            if len(w) >= 2
+            and not w.isdigit()
+            and not re.fullmatch(r"[a-f0-9]{6,}", w, re.IGNORECASE)
+            and w.lower() not in _SLUG_STOPWORDS
+        ]
+
+        if len(words) >= 3:
+            return " ".join(w.capitalize() for w in words)[:120]
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
+def _tidy(s: str) -> str:
+    """Title-case an ALL-CAPS GDELT string and deduplicate comma-separated parts."""
+    # Remove duplicate suffixes like "Egypt, Egypt"
+    parts = [p.strip() for p in s.split(",")]
+    seen: list[str] = []
+    for p in parts:
+        if p.lower() not in (x.lower() for x in seen):
+            seen.append(p)
+    return ", ".join(p.title() for p in seen)
 
 
 def _extract_export_url(text: str) -> str | None:
@@ -255,14 +311,18 @@ class GDELTIngestionService(BaseIngestionService):
             act2      = row[_C_ACT2].strip()
             sqldate   = row[_C_DATE].strip()
 
-            # Build a readable title
-            actors = " / ".join(filter(None, [act1, act2]))
-            if actors and geo_name:
-                title = f"{actors} — {geo_name}"
+            # Build a readable title — prefer URL slug headline; fall back to actors/geo
+            actors    = " / ".join(filter(None, [act1, act2]))
+            slug_title = _slug_title(url)
+
+            if slug_title:
+                title = slug_title
+            elif actors and geo_name:
+                title = f"{_tidy(actors)} — {_tidy(geo_name)}"
             elif geo_name:
-                title = f"Event in {geo_name}"
+                title = f"Event in {_tidy(geo_name)}"
             elif actors:
-                title = f"Event: {actors}"
+                title = f"Event: {_tidy(actors)}"
             else:
                 skipped += 1
                 continue

@@ -84,6 +84,9 @@ function NewsDetail({ event }: { event: GlobeEvent }) {
   const geocodeConf     = typeof meta.geocode_confidence === 'number' ? meta.geocode_confidence : null;
   const locationName    = typeof meta.location_name === 'string'      ? meta.location_name      : null;
   const firstSeen       = typeof meta.first_seen    === 'string'      ? meta.first_seen          : null;
+  const sourceDomain    = typeof meta.source_domain === 'string' && meta.source_domain
+    ? meta.source_domain
+    : null;
 
   const HR = (
     <div style={{ borderBottom: '1px solid rgba(0,240,255,0.08)', margin: '8px 0' }} />
@@ -197,7 +200,7 @@ function NewsDetail({ event }: { event: GlobeEvent }) {
       {HR}
 
       {/* Source & time ───────────────────────────────────────────────────── */}
-      <Row label="SOURCE"    value={event.source} />
+      <Row label="SOURCE"    value={sourceDomain ? `${event.source} (${sourceDomain})` : event.source} />
       {firstSeen && <Row label="FIRST SEEN" value={new Date(firstSeen).toUTCString().substring(5, 22)} dim />}
       <Row label="TIME"      value={formatTime(event.timestamp)} />
       {event.sourceUrl && (
