@@ -42,6 +42,9 @@ BATCH_SIZE = 500
 # News sources that participate in cross-source dedup
 _NEWS_SOURCES = frozenset({"rss_wires", "event_registry", "gdelt"})
 
+# Conflict sources for cross-reference dedup (Story 3.7)
+_CONFLICT_SOURCES = frozenset({"acled", "military_osint"})
+
 # ---------------------------------------------------------------------------
 # Title similarity
 # ---------------------------------------------------------------------------
@@ -120,6 +123,55 @@ _CLEANUP_SQL = text("""
     DELETE FROM events
     WHERE expires_at IS NOT NULL AND expires_at < NOW()
     RETURNING id
+""")
+
+# Story 3.7 — conflict cross-reference dedup SQL
+# ACLED battle ↔ Military OSINT report: 50km + 24hr window
+_NEARBY_CONFLICT_SQL = text("""
+    SELECT
+        id::text    AS id,
+        title       AS title,
+        severity    AS severity,
+        metadata    AS metadata,
+        source      AS source,
+        source_id   AS source_id,
+        event_type  AS event_type,
+        expires_at  AS expires_at
+    FROM events
+    WHERE event_type = 'conflict'
+      AND source IN ('acled', 'military_osint')
+      AND created_at >= NOW() - INTERVAL '24 hours'
+      AND location IS NOT NULL
+      AND ST_DWithin(
+            location::geography,
+            ST_SetSRID(ST_MakePoint(:lng, :lat), 4326)::geography,
+            :radius_m
+          )
+    LIMIT 10
+""")
+
+# ACLED/military conflict ↔ news "conflict" category: 100km + 12hr
+_NEARBY_CONFLICT_NEWS_SQL = text("""
+    SELECT
+        id::text    AS id,
+        title       AS title,
+        severity    AS severity,
+        metadata    AS metadata,
+        source      AS source,
+        source_id   AS source_id,
+        event_type  AS event_type,
+        expires_at  AS expires_at
+    FROM events
+    WHERE event_type = 'news'
+      AND category LIKE '%conflict%'
+      AND created_at >= NOW() - INTERVAL '12 hours'
+      AND location IS NOT NULL
+      AND ST_DWithin(
+            location::geography,
+            ST_SetSRID(ST_MakePoint(:lng, :lat), 4326)::geography,
+            :radius_m
+          )
+    LIMIT 10
 """)
 
 
@@ -266,6 +318,93 @@ async def _cross_source_dedup(
         "[dedup] cross-source: %d new, %d merged", stats["new"], stats["merged"]
     )
     return to_insert, result_tuples
+
+
+# ---------------------------------------------------------------------------
+# Conflict cross-reference dedup (Story 3.7)
+# ---------------------------------------------------------------------------
+
+_CROSS_LINK_SQL = text("""
+    UPDATE events
+    SET
+        metadata   = jsonb_set(
+                        cast(:meta AS jsonb),
+                        '{cross_linked_ids}',
+                        cast(:linked_ids AS jsonb)
+                     ),
+        updated_at = NOW()
+    WHERE id = cast(:event_id AS uuid)
+""")
+
+
+async def _conflict_cross_reference(events: list[dict]) -> None:
+    """
+    For conflict events (ACLED / military_osint):
+    1. Mark any nearby ACLED ↔ military_osint pairs within 50km / 24hr
+    2. Link conflict events to nearby news articles within 100km / 12hr
+
+    Updates metadata.cross_linked_ids in place (best-effort — errors are logged
+    but do not block ingestion).
+    """
+    if not events:
+        return
+
+    for ev in events:
+        lat  = ev.get("latitude")
+        lng  = ev.get("longitude")
+        eid  = ev.get("_upserted_id")  # set by batch_upsert when available
+        if lat is None or lng is None or eid is None:
+            continue
+
+        linked_ids: list[str] = list(
+            ev.get("metadata", {}).get("cross_linked_ids") or []
+        )
+
+        try:
+            async with AsyncSessionLocal() as session:
+                # 1. Conflict ↔ conflict (50km / 24hr)
+                res = await session.execute(
+                    _NEARBY_CONFLICT_SQL,
+                    {"lat": lat, "lng": lng, "radius_m": 50_000},
+                )
+                for row in res.mappings().all():
+                    rid = str(row["id"])
+                    if rid != str(eid) and rid not in linked_ids:
+                        linked_ids.append(rid)
+
+                # 2. Conflict ↔ news "conflict" category (100km / 12hr)
+                res2 = await session.execute(
+                    _NEARBY_CONFLICT_NEWS_SQL,
+                    {"lat": lat, "lng": lng, "radius_m": 100_000},
+                )
+                for row in res2.mappings().all():
+                    rid = str(row["id"])
+                    if rid not in linked_ids:
+                        linked_ids.append(rid)
+
+            if not linked_ids:
+                continue
+
+            # Update metadata.cross_linked_ids on the upserted event
+            meta = ev.get("metadata") or {}
+            meta["cross_linked_ids"] = linked_ids
+            async with AsyncSessionLocal() as write_session:
+                async with write_session.begin():
+                    await write_session.execute(
+                        _CROSS_LINK_SQL,
+                        {
+                            "event_id":   str(eid),
+                            "meta":       json.dumps(meta),
+                            "linked_ids": json.dumps(linked_ids),
+                        },
+                    )
+            logger.debug(
+                "[dedup] conflict cross-link: event %s → %d links",
+                eid, len(linked_ids),
+            )
+
+        except Exception as exc:
+            logger.debug("[dedup] conflict cross-reference skipped: %s", exc)
 
 
 # ---------------------------------------------------------------------------
@@ -449,6 +588,22 @@ async def upsert_events(
         batch_results = await _batch_upsert(batch_candidates)
         stats_batch = len(batch_results)
         result_tuples.extend(batch_results)
+
+    # Conflict cross-reference dedup (Story 3.7) — mark ACLED↔OSINT↔news links
+    conflict_events = [
+        ev for ev in events
+        if ev.get("source") in _CONFLICT_SOURCES
+    ]
+    if conflict_events:
+        # Attach upserted IDs so cross-reference can update the rows
+        id_map = {
+            (json.loads(payload).get("source"), json.loads(payload).get("source_id")): eid
+            for payload, _, eid in result_tuples
+        }
+        for ev in conflict_events:
+            key = (ev.get("source"), ev.get("source_id"))
+            ev["_upserted_id"] = id_map.get(key)
+        asyncio.create_task(_conflict_cross_reference(conflict_events))
 
     total_out = stats_merged + stats_batch
     logger.info(
