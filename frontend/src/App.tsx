@@ -65,7 +65,7 @@ function AppInner() {
       </div>
 
       {/* Layer 20 — interactive panels */}
-      <div style={{ position: 'fixed', top: 0, left: 0, height: '100%', zIndex: 20, pointerEvents: 'none' }}>
+      <div style={{ position: 'fixed', top: 0, left: 0, height: '100%', zIndex: 20, pointerEvents: 'none', display: 'flex', alignItems: 'center' }}>
         <LayerControls />
       </div>
 
