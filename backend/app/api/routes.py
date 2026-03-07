@@ -1,11 +1,14 @@
-"""REST API routes — Story 1.3 / 2.9.
+"""REST API routes — Story 1.3 / 2.9 / 3.4 / 3.5.
 
 Endpoints:
   GET /api/health              — DB + Redis status, uptime
   GET /api/events              — paginated events with full filter set
   GET /api/events/{id}         — single event with full metadata
+  GET /api/events/history      — nearest snapshot to a given timestamp
+  GET /api/events/history/range — snapshot summaries over a time range
   GET /api/layers              — layer catalogue with live event counts
   GET /api/services            — ingestion service status (Story 2.9)
+  GET /api/traffic/config      — traffic tile provider + config (Story 3.4)
   GET /api/ai/status           — AI analyzer status (Story 2.8)
 """
 from __future__ import annotations
@@ -231,6 +234,75 @@ async def list_events(
     return [_row_to_response(row) for row in result.mappings()]
 
 
+# ── /api/events/history (must be BEFORE /{event_id} to avoid routing collision) ───
+
+@router.get("/events/history")
+async def events_history(
+    timestamp: datetime = Query(
+        description="ISO-8601 UTC timestamp — returns the nearest snapshot to this time",
+    ),
+):
+    """
+    Return the nearest event snapshot to *timestamp*.
+
+    The snapshot contains compressed event summaries (id, type, lat, lng,
+    severity, title) captured every 15 minutes.  Searches ±4 hours from
+    the requested time; returns 404 if no snapshot is found in that window.
+
+    Story 3.5 — Event History & Snapshot Service.
+    """
+    from app.services.snapshot_service import get_snapshot_at
+
+    result = await get_snapshot_at(timestamp)
+    if result is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No snapshot found within ±4 hours of {timestamp.isoformat()}",
+        )
+    return result
+
+
+@router.get("/events/history/range")
+async def events_history_range(
+    start: datetime = Query(description="Range start (ISO-8601 UTC)"),
+    end:   datetime = Query(description="Range end (ISO-8601 UTC)"),
+    interval: int  = Query(
+        default=1,
+        ge=1,
+        le=24,
+        description="Bucket size in hours (1–24)",
+    ),
+):
+    """
+    Return snapshot summaries bucketed into *interval*-hour bins.
+
+    Each bucket contains the event count and per-layer counts from the most
+    recent snapshot in that bin.  Used by the Timeline scrubber (Story 3.11)
+    to render event density over time.
+
+    Story 3.5 — Event History & Snapshot Service.
+    """
+    from app.services.snapshot_service import get_history_range
+
+    if end <= start:
+        raise HTTPException(status_code=422, detail="end must be after start")
+    max_range = 7 * 24  # 7 days in hours
+    range_hours = (end - start).total_seconds() / 3600
+    if range_hours > max_range:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Range too large: maximum is {max_range}h (7 days)",
+        )
+
+    buckets = await get_history_range(start, end, interval_hours=interval)
+    return {
+        "start":      start.isoformat(),
+        "end":        end.isoformat(),
+        "interval_h": interval,
+        "buckets":    buckets,
+    }
+
+
 # ── /api/events/{event_id} ────────────────────────────────────────────────────
 
 @router.get("/events/{event_id}", response_model=GlobeEventResponse)
@@ -343,5 +415,4 @@ async def ai_status():
     from app.services.ai_analyzer import get_analyzer  # avoid circular
     analyzer = get_analyzer()
     return analyzer.get_status()
-
 

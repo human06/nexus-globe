@@ -44,3 +44,13 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
     """FastAPI dependency that yields a database session."""
     async with AsyncSessionLocal() as session:
         yield session
+
+
+from contextlib import asynccontextmanager  # noqa: E402
+
+
+@asynccontextmanager
+async def get_db_session() -> AsyncGenerator[AsyncSession, None]:
+    """Async context manager for use outside of FastAPI request context."""
+    async with AsyncSessionLocal() as session:
+        yield session

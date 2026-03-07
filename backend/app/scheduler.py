@@ -19,6 +19,7 @@ from app.services.ingestion.acled import ACLEDIngestionService
 from app.services.ingestion.traffic import TrafficIngestionService
 from app.services.dedup import cleanup_stale_events
 from app.services.ai_analyzer import get_analyzer
+from app.services.snapshot_service import create_snapshot, cleanup_old_snapshots
 
 logger = logging.getLogger(__name__)
 
@@ -82,13 +83,34 @@ async def _run_service(service) -> None:
 
 
 async def _run_cleanup() -> None:
-    """Periodic stale-event cleanup job."""
+    """Periodic stale-event + old-snapshot cleanup job."""
     try:
         deleted = await cleanup_stale_events()
         if deleted:
             logger.info("[scheduler] Stale-event cleanup: %d rows removed", deleted)
     except Exception as exc:
         logger.exception("[scheduler] Stale-event cleanup failed: %s", exc)
+
+    try:
+        pruned = await cleanup_old_snapshots()
+        if pruned:
+            logger.info("[scheduler] Old-snapshot cleanup: %d rows removed", pruned)
+    except Exception as exc:
+        logger.exception("[scheduler] Old-snapshot cleanup failed: %s", exc)
+
+
+async def _run_snapshot() -> None:
+    """Periodic snapshot of all active events (Story 3.5)."""
+    try:
+        stats = await create_snapshot()
+        logger.info(
+            "[snapshot] Captured %d events (%.1f KB) at %s",
+            stats["event_count"],
+            stats["size_bytes"] / 1024,
+            stats["snapshot_time"],
+        )
+    except Exception as exc:
+        logger.exception("[scheduler] Snapshot creation failed: %s", exc)
 
 
 async def _run_ai_enrichment() -> None:
@@ -136,6 +158,16 @@ def start_scheduler() -> AsyncIOScheduler:
         replace_existing=True,
     )
     logger.info("[scheduler] Registered stale-event cleanup every 300s")
+
+    # Event snapshot — runs every 15 minutes (Story 3.5)
+    _scheduler.add_job(
+        _run_snapshot,
+        "interval",
+        seconds=900,
+        id="event_snapshot",
+        replace_existing=True,
+    )
+    logger.info("[scheduler] Registered event snapshot every 900s")
 
     # AI enrichment cycle — runs every 60 seconds
     _scheduler.add_job(

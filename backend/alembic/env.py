@@ -17,7 +17,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from app.config import settings  # noqa: E402
 from app.db.database import Base  # noqa: E402
-import app.models.event  # noqa: E402, F401  — populate Base.metadata
+import app.models.event     # noqa: E402, F401  — populate Base.metadata
+import app.models.snapshot  # noqa: E402, F401  — event_snapshots table
 
 # ── Alembic Config object ─────────────────────────────────────────────────────
 config = context.config
