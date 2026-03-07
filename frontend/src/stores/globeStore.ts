@@ -12,6 +12,12 @@ interface LayerVisibility {
   cameras: boolean;
 }
 
+interface FlyToTarget {
+  lat: number;
+  lng: number;
+  altitude?: number;
+}
+
 interface GlobeStore {
   // State
   events: Map<string, GlobeEvent>;
@@ -24,6 +30,8 @@ interface GlobeStore {
   wsStatus: WSStatus;
   /** Whether the globe is auto-rotating */
   isAutoRotating: boolean;
+  /** Camera fly-to target (set to trigger a smooth pan on the globe) */
+  flyToTarget: FlyToTarget | null;
 
   // Actions
   toggleLayer: (layer: keyof LayerVisibility) => void;
@@ -35,6 +43,8 @@ interface GlobeStore {
   setTimeRange: (range: [number, number]) => void;
   setSearchQuery: (query: string) => void;
   setWsStatus: (status: WSStatus) => void;
+  flyTo: (target: FlyToTarget) => void;
+  clearFlyTo: () => void;
 }
 
 const now = Date.now();
@@ -60,6 +70,7 @@ export const useGlobeStore = create<GlobeStore>((set) => ({
   selectedEventId: null,
   wsStatus: 'disconnected',
   isAutoRotating: true,
+  flyToTarget: null,
 
   toggleAutoRotate: () =>
     set((state) => ({ isAutoRotating: !state.isAutoRotating })),
@@ -104,8 +115,12 @@ export const useGlobeStore = create<GlobeStore>((set) => ({
   setSearchQuery: (query) => set({ searchQuery: query }),
 
   setWsStatus: (status) => set({ wsStatus: status }),
+
+  flyTo: (target) => set({ flyToTarget: target }),
+
+  clearFlyTo: () => set({ flyToTarget: null }),
 }));
 
 // Convenience type export
-export type { GlobeStore, LayerVisibility, EventType };
+export type { GlobeStore, LayerVisibility, EventType, FlyToTarget };
 

@@ -1,10 +1,12 @@
-"""REST API routes — Story 1.3.
+"""REST API routes — Story 1.3 / 2.9.
 
 Endpoints:
   GET /api/health              — DB + Redis status, uptime
   GET /api/events              — paginated events with full filter set
   GET /api/events/{id}         — single event with full metadata
   GET /api/layers              — layer catalogue with live event counts
+  GET /api/services            — ingestion service status (Story 2.9)
+  GET /api/ai/status           — AI analyzer status (Story 2.8)
 """
 from __future__ import annotations
 
@@ -245,4 +247,54 @@ async def get_event(
         raise HTTPException(status_code=404, detail="Event not found")
 
     return _row_to_response(row)
+
+
+# ── /api/services ─────────────────────────────────────────────────────────────
+
+@router.get("/services")
+async def list_services():
+    """
+    Return the status and runtime stats of all registered ingestion services.
+
+    Story 2.9 — scheduler status endpoint.
+    """
+    from app.scheduler import get_service_statuses, get_scheduler  # avoid circular
+    statuses = get_service_statuses()
+
+    # Enrich with scheduler job metadata (next run time, etc.)
+    sched = get_scheduler()
+    job_map: dict[str, object] = {}
+    if sched and sched.running:
+        for job in sched.get_jobs():
+            job_map[job.id] = job
+
+    enriched = []
+    for svc in statuses:
+        entry = dict(svc)
+        job = job_map.get(f"ingest_{svc['name']}")
+        entry["next_run"] = (
+            job.next_run_time.isoformat() if job and getattr(job, "next_run_time", None) else None
+        )
+        enriched.append(entry)
+
+    return {
+        "services": enriched,
+        "total": len(enriched),
+        "scheduler_running": bool(sched and sched.running),
+    }
+
+
+# ── /api/ai/status ────────────────────────────────────────────────────────────
+
+@router.get("/ai/status")
+async def ai_status():
+    """
+    Return the AI analyzer status: enabled, model, daily counters, avg latency.
+
+    Story 2.8 — AI analyzer status endpoint.
+    """
+    from app.services.ai_analyzer import get_analyzer  # avoid circular
+    analyzer = get_analyzer()
+    return analyzer.get_status()
+
 

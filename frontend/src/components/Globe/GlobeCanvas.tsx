@@ -12,6 +12,10 @@ import { useEffect, useRef, useState } from 'react';
 import Globe from 'globe.gl';
 import { GlobeContext, type GlobeInstance } from './GlobeContext';
 import FlightLayer from './layers/FlightLayer';
+import NewsLayer from './layers/NewsLayer';
+import DisasterLayer from './layers/DisasterLayer';
+import ShipLayer from './layers/ShipLayer';
+import HtmlLayerSync from './HtmlLayerSync';
 import { useGlobeStore } from '../../stores/globeStore';
 
 // Auto-rotate speed (OrbitControls unit: full rotations per minute × 2)
@@ -26,6 +30,8 @@ export default function GlobeCanvas() {
   const [isLoaded, setIsLoaded] = useState(false);
 
   const isAutoRotating = useGlobeStore((s) => s.isAutoRotating);
+  const flyToTarget    = useGlobeStore((s) => s.flyToTarget);
+  const clearFlyTo     = useGlobeStore((s) => s.clearFlyTo);
   // Ref so event handlers always see the latest store value without re-registering
   const isAutoRotatingRef = useRef(isAutoRotating);
   useEffect(() => { isAutoRotatingRef.current = isAutoRotating; }, [isAutoRotating]);
@@ -129,6 +135,16 @@ export default function GlobeCanvas() {
     }
   }, [isAutoRotating]);
 
+  // Fly camera to a location when flyToTarget changes
+  useEffect(() => {
+    if (!globeInstance || !flyToTarget) return;
+    globeInstance.pointOfView(
+      { lat: flyToTarget.lat, lng: flyToTarget.lng, altitude: flyToTarget.altitude ?? 1.5 },
+      1200,
+    );
+    clearFlyTo();
+  }, [flyToTarget, globeInstance, clearFlyTo]);
+
   return (
     <GlobeContext.Provider value={globeInstance}>
       {/* Loading splash — shown until country GeoJSON arrives */}
@@ -181,6 +197,11 @@ export default function GlobeCanvas() {
 
       {/* Data layers — rendered as imperative effects, return null */}
       {globeInstance && <FlightLayer />}
+      {globeInstance && <NewsLayer />}
+      {globeInstance && <DisasterLayer />}
+      {globeInstance && <ShipLayer />}
+      {/* Single component that owns globe.htmlElementsData(): merges news + disaster + ship */}
+      {globeInstance && <HtmlLayerSync />}
     </GlobeContext.Provider>
   );
 }

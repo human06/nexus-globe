@@ -97,3 +97,8 @@ body::after {
   100% { transform: translateY(100vh); }
 }
 
+@keyframes ticker-flash {
+  0%   { background: rgba(0, 240, 255, 0.22); }
+  100% { background: transparent; }
+}
+

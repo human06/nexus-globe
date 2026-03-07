@@ -2,6 +2,7 @@ import { Component, type ReactNode, type ErrorInfo } from 'react';
 import './App.css';
 import GlobeCanvas from './components/Globe/GlobeCanvas';
 import HUDOverlay from './components/HUD/HUDOverlay';
+import NewsTicker from './components/HUD/NewsTicker';
 import SidePanel from './components/Panel/SidePanel';
 import LayerControls from './components/Controls/LayerControls';
 import { useWebSocket } from './hooks/useWebSocket';
@@ -71,6 +72,9 @@ function AppInner() {
       <div style={{ position: 'fixed', top: 0, right: 0, height: '100%', zIndex: 20, pointerEvents: 'none' }}>
         <SidePanel />
       </div>
+
+      {/* Layer 30 — News Ticker at bottom (has its own pointer-events: auto) */}
+      <NewsTicker />
     </div>
   );
 }
