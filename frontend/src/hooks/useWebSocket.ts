@@ -17,6 +17,21 @@ import type { GlobeEvent, WSIncomingMessage } from '../types/events';
 const WS_URL = (import.meta.env.VITE_WS_URL ?? 'ws://localhost:8001') + '/ws';
 const BACKOFF_STEPS_MS = [1_000, 2_000, 4_000, 8_000, 16_000, 30_000];
 
+// Map Zustand store layer keys → backend event_type strings.
+// Explicit table avoids the regex stripping 's' from 'news' → 'new'.
+const LAYER_KEY_TO_TYPE: Record<string, string> = {
+  flights:   'flight',
+  news:      'news',
+  ships:     'ship',
+  disasters: 'disaster',
+  satellites:'satellite',
+  conflicts: 'conflict',
+  traffic:   'traffic',
+  cameras:   'camera',
+};
+const toBackendType = (key: string): string =>
+  LAYER_KEY_TO_TYPE[key] ?? key.replace(/s$/, '').replace(/ie$/, 'y');
+
 // ── Server → Frontend normalisation ──────────────────────────────────────────
 
 /**
@@ -164,12 +179,7 @@ export function useWebSocket(): UseWebSocketReturn {
       const currentLayers = useGlobeStore.getState().layers;
       const activeLayers = (Object.entries(currentLayers) as [string, boolean][])
         .filter(([, on]) => on)
-        .map(([type]) => {
-          // Map store key → backend event_type key
-          // 'flights' → 'flight', 'ships' → 'ship', 'satellites' → 'satellite'
-          // 'disasters' → 'disaster', 'conflicts' → 'conflict', 'cameras' → 'camera'
-          return type.replace(/s$/, '').replace(/ie$/, 'y');
-        });
+        .map(([key]) => toBackendType(key));
       subscribeToLayers(activeLayers);
     };
 
@@ -214,10 +224,6 @@ export function useWebSocket(): UseWebSocketReturn {
   useEffect(() => {
     const ws = wsRef.current;
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
-
-    // Map store layer keys to backend event_type names
-    const toBackendType = (key: string) =>
-      key.replace(/s$/, '').replace(/ie$/, 'y');
 
     (Object.entries(layers) as [string, boolean][]).forEach(([key, on]) => {
       const backendType = toBackendType(key);
