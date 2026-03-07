@@ -284,6 +284,53 @@ async def list_services():
     }
 
 
+# ── /api/traffic/config ──────────────────────────────────────────────────────
+
+@router.get("/traffic/config")
+async def traffic_config():
+    """
+    Return traffic layer configuration for the frontend.
+
+    Tells the frontend:
+    - whether traffic data is available (always true — demo fallback)
+    - which tile provider is active (google / tomtom / demo)
+    - the tile URL template for the overlay layer
+    - the poll refresh interval
+
+    Story 3.4 — Traffic Layer Integration.
+    """
+    from app.config import settings  # avoid circular at module level
+
+    google_key: str = settings.google_maps_api_key or ""
+    tomtom_key: str = getattr(settings, "tomtom_api_key", "") or ""
+
+    if google_key:
+        provider = "google"
+        tile_url = (
+            f"https://mt{{s}}.google.com/vt?lyrs=h,traffic"
+            f"&x={{x}}&y={{y}}&z={{z}}&key={google_key}"
+        )
+    elif tomtom_key:
+        provider = "tomtom"
+        # TomTom raster traffic flow tiles
+        tile_url = (
+            f"https://{{s}}.api.tomtom.com/traffic/map/4/tile/flow/relative-delay/"
+            f"{{z}}/{{x}}/{{y}}.png?key={tomtom_key}&tileSize=256"
+        )
+    else:
+        provider = "demo"
+        tile_url = None  # frontend falls back to coloured city dots only
+
+    return {
+        "enabled": True,
+        "provider": provider,
+        "tile_url": tile_url,
+        "api_key_present": bool(google_key or tomtom_key),
+        "refresh_interval_s": 120,
+        "city_count": 20,
+    }
+
+
 # ── /api/ai/status ────────────────────────────────────────────────────────────
 
 @router.get("/ai/status")

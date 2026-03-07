@@ -38,5 +38,9 @@ class Settings(BaseSettings):
     acled_api_key: str = ""
     acled_email: str = ""
 
+    # Traffic — TomTom Traffic Flow API (free tier)
+    # Register at https://developer.tomtom.com/
+    tomtom_api_key: str = ""
+
 
 settings = Settings()
