@@ -134,7 +134,8 @@ async def _run_ai_enrichment() -> None:
 def start_scheduler() -> AsyncIOScheduler:
     """Create the APScheduler, register all jobs, and start it."""
     global _scheduler
-    _scheduler = AsyncIOScheduler()
+    # misfire_grace_time=None: run jobs even if they're very late (e.g. at startup)
+    _scheduler = AsyncIOScheduler(job_defaults={"misfire_grace_time": None})
 
     for svc in _services:
         _scheduler.add_job(
@@ -144,6 +145,7 @@ def start_scheduler() -> AsyncIOScheduler:
             args=[svc],
             id=f"ingest_{svc.source_name}",
             replace_existing=True,
+            next_run_time=datetime.now(timezone.utc),  # fire immediately on startup
         )
         logger.info(
             "[scheduler] Registered '%s' every %ds",
