@@ -11,7 +11,7 @@ import type { EventType, GlobeEvent } from '../types/events';
  */
 const LAYER_CAPS: Partial<Record<EventType, number>> = {
   flight:    500,   // ADS-B: can be 4 000+ world-wide
-  ship:      300,   // AIS HTML markers: most expensive (DOM layout per element)
+  ship:      5000,  // AIS WebGL sprites: GPU-resident, can handle 5 000+ (LOD managed in ShipLayer)
   satellite: 600,   // CelesTrak: ~487 typically — soft cap
   conflict:  400,
   traffic:    80,

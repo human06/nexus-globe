@@ -1,262 +1,311 @@
 /**
- * ShipLayer — renders AIS ship positions as neon-green diamond markers.
+ * ShipLayer — renders AIS ship positions as WebGL Three.js sprites injected
+ * directly into Globe.GL's Three.js scene (globe.scene()).
  *
- * Writes into the shared `htmlMarkersStore` so `HtmlLayerSync` can combine
- * news + disaster + ship into a single `globe.htmlElementsData()` call.
+ * Why WebGL instead of HTML DOM markers:
+ *  The previous DOM approach was capped at ~300 ships due to browser layout
+ *  cost per HTML element.  By using THREE.Sprites we render 5 000+ ships at
+ *  60 fps with zero DOM overhead — geometry lives entirely on the GPU.
  *
- * Visual language:
- *   Diamond-shaped marker (rotated square) — neon green `#00ff88`
- *   Heading arrow pointing in vessel direction
- *   Size by type: cargo/tanker (14px) > passenger (12px) > fishing/special (9px)
- *   Ships < 0.5 kts shown dimmed (at anchor)
- *   Selected: pulsing orange ring
- *
- * Ship trail (last 20 positions) is stored in `metadata.trail` and is
- * displayed in the EventDetail panel; a globe path-trail requires a shared
- * pathsData slot (future enhancement — pathsData is currently owned by FlightLayer).
+ * Visuals:
+ *  - Neon-green upward-arrow sprite per ship
+ *  - sprite.material.rotation  = heading_deg → arrow points in vessel direction
+ *  - Dimmed opacity for vessels at anchor (speed < 0.5 kts)
+ *  - Category colour: cargo=green / tanker=orange / passenger=blue /
+ *                     fishing=yellow / military=red / other=cyan
+ *  - Selected: brighter, larger sprite
+ *  - Hover: CSS tooltip panel positioned at mouse
+ *  - Layer hides when ships toggle is off
  */
-import { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState, useCallback } from 'react';
+import * as THREE from 'three';
 import { useGlobe } from '../GlobeContext';
 import { useHtmlMarkersStore } from '../htmlMarkersStore';
 import { useLayerData } from '../../../hooks/useLayerData';
 import { useGlobeStore } from '../../../stores/globeStore';
 import type { GlobeEvent } from '../../../types/events';
 
-// ── CSS injection ─────────────────────────────────────────────────────────────
+// ── Globe.GL internal surface ─────────────────────────────────────────────────
 
-const STYLE_ID = 'nexus-ship-layer-styles';
+type GlobeEx = {
+  scene:     () => THREE.Scene;
+  camera:    () => THREE.Camera;
+  renderer:  () => THREE.WebGLRenderer;
+  getCoords: (lat: number, lng: number, alt: number) => { x: number; y: number; z: number };
+};
 
-function ensureStyles() {
-  if (document.getElementById(STYLE_ID)) return;
-  const style = document.createElement('style');
-  style.id = STYLE_ID;
-  style.textContent = `
-    .ns-wrap {
-      position: relative;
-      cursor: pointer;
-      pointer-events: all;
-    }
-    .ns-wrap:hover .ns-tip { display: block; }
+// ── Category → colour ─────────────────────────────────────────────────────────
 
-    .ns-tip {
-      display: none;
-      position: absolute;
-      bottom: calc(100% + 8px);
-      left: 50%;
-      transform: translateX(-50%);
-      background: rgba(0,0,0,0.93);
-      border: 1px solid rgba(0,255,136,0.5);
-      padding: 7px 10px;
-      font-family: 'JetBrains Mono', monospace;
-      font-size: 10.5px;
-      line-height: 1.55;
-      color: #d0ffd8;
-      border-radius: 3px;
-      pointer-events: none;
-      z-index: 9999;
-      min-width: 170px;
-      max-width: 240px;
-      white-space: normal;
-      word-break: break-word;
-      box-shadow: 0 2px 16px rgba(0,0,0,0.7);
-    }
+const CATEGORY_COLORS: Record<string, string> = {
+  cargo:     '#00ff88',
+  tanker:    '#ff9944',
+  passenger: '#44aaff',
+  fishing:   '#ffee44',
+  military:  '#ff3333',
+  tug:       '#ff66cc',
+  pleasure:  '#cc88ff',
+  sailing:   '#88ffee',
+};
 
-    .ns-diamond {
-      position: absolute;
-      top: 50%; left: 50%;
-      transform: translate(-50%, -50%) rotate(45deg);
-      background: rgba(0, 255, 136, 0.2);
-      border: 1.5px solid #00ff88;
-      box-shadow: 0 0 7px rgba(0, 255, 136, 0.6);
-    }
-
-    /* Heading arrow — rotated via inline style to vessel heading */
-    .ns-arrow {
-      position: absolute;
-      top: 50%; left: 50%;
-      width: 0; height: 0;
-      pointer-events: none;
-    }
-    .ns-arrow::after {
-      content: '';
-      position: absolute;
-      top: -15px;
-      left: -3px;
-      width: 0; height: 0;
-      border-left: 3px solid transparent;
-      border-right: 3px solid transparent;
-      border-bottom: 7px solid #00ff88;
-      filter: drop-shadow(0 0 3px #00ff88);
-    }
-
-    .ns-selected-ring {
-      position: absolute;
-      top: 50%; left: 50%;
-      border-radius: 50%;
-      border: 2px solid #ff8800;
-      transform: translate(-50%, -50%);
-      animation: ns-sel-pulse 1.2s ease-in-out infinite;
-      pointer-events: none;
-    }
-    @keyframes ns-sel-pulse {
-      0%, 100% { opacity: 1;   box-shadow: 0 0 6px #ff8800; }
-      50%       { opacity: 0.5; box-shadow: 0 0 14px #ff8800; }
-    }
-  `;
-  document.head.appendChild(style);
-}
-
-// ── Sizing by ship category ───────────────────────────────────────────────────
-
-function shipSize(category: string): number {
-  const cat = category.toLowerCase();
-  if (cat === 'cargo' || cat === 'tanker') return 14;
-  if (cat === 'passenger')                 return 12;
-  return 9; // fishing, special, unknown
-}
-
-// ── DOM builder ───────────────────────────────────────────────────────────────
-
-function mkShipEl(ev: GlobeEvent, isSelected: boolean): HTMLElement {
-  const meta    = ev.metadata as Record<string, unknown>;
-  const sogKts  = (meta.sog_kts as number | null) ?? (ev.speed ? ev.speed / 1.852 : null);
-  const isAnchor = sogKts !== null && sogKts < 0.5;
-  const heading = ev.heading ?? (meta.heading as number | null) ?? 0;
-  const size    = shipSize(ev.category);
-  const outer   = size + 16; // wrapper side (room for selected ring + arrow)
-
-  const wrap = document.createElement('div');
-  wrap.className  = 'ns-wrap';
-  wrap.style.cssText = `width:${outer}px;height:${outer}px;opacity:${isAnchor ? 0.35 : 1};`;
-
-  // Diamond
-  const diamond     = document.createElement('div');
-  diamond.className = 'ns-diamond';
-  diamond.style.cssText = `width:${size}px;height:${size}px;`;
-  wrap.appendChild(diamond);
-
-  // Heading arrow (omit when at anchor)
-  if (!isAnchor) {
-    const arrow     = document.createElement('div');
-    arrow.className = 'ns-arrow';
-    arrow.style.transform = `translate(-50%,-50%) rotate(${heading}deg)`;
-    wrap.appendChild(arrow);
+function shipColor(ev: GlobeEvent): string {
+  const cat = (ev.category ?? '').toLowerCase();
+  for (const [key, col] of Object.entries(CATEGORY_COLORS)) {
+    if (cat.includes(key)) return col;
   }
-
-  // Tooltip
-  const name = ev.title.replace(/\s*\(.*?\)\s*$/, '').trim() || `MMSI ${meta.mmsi}`;
-  const dest  = meta.destination ? `<br/>→ <b>${meta.destination}</b>` : '';
-  const flag  = meta.flag_country ? ` ${meta.flag_country}` : '';
-  const tip   = document.createElement('div');
-  tip.className = 'ns-tip';
-  tip.innerHTML = [
-    `<b>${name}</b>${flag}`,
-    `${ev.category.toUpperCase()} • ${sogKts !== null ? sogKts.toFixed(1) + ' kts' : 'speed N/A'}`,
-    `HDG ${heading}°${dest}`,
-  ].join('<br/>');
-  wrap.appendChild(tip);
-
-  // Selected ring
-  if (isSelected) {
-    const ring     = document.createElement('div');
-    ring.className = 'ns-selected-ring';
-    ring.style.cssText = `width:${size + 14}px;height:${size + 14}px;`;
-    wrap.appendChild(ring);
-  }
-
-  return wrap;
+  return '#00ccff';
 }
 
-/** Mutate an existing element to reflect updated selection/anchor state. */
-function updateEl(el: HTMLElement, ev: GlobeEvent, isSelected: boolean): void {
-  const meta    = ev.metadata as Record<string, unknown>;
-  const sogKts  = (meta.sog_kts as number | null) ?? (ev.speed ? ev.speed / 1.852 : null);
-  const isAnchor = sogKts !== null && sogKts < 0.5;
+// ── Canvas texture factory ────────────────────────────────────────────────────
 
-  el.style.opacity = isAnchor ? '0.35' : '1';
+const _texCache = new Map<string, THREE.CanvasTexture>();
 
-  const existing = el.querySelector('.ns-selected-ring');
-  if (isSelected && !existing) {
-    const size = shipSize(ev.category);
-    const ring = document.createElement('div');
-    ring.className = 'ns-selected-ring';
-    ring.style.cssText = `width:${size + 14}px;height:${size + 14}px;`;
-    el.appendChild(ring);
-  } else if (!isSelected && existing) {
-    existing.remove();
-  }
+function buildShipTexture(hexColor: string, selected = false): THREE.CanvasTexture {
+  const cacheKey = `${hexColor}:${selected}`;
+  if (_texCache.has(cacheKey)) return _texCache.get(cacheKey)!;
+  const S = 64;
+  const c = document.createElement('canvas');
+  c.width = S; c.height = S;
+  const ctx = c.getContext('2d')!;
+  const cx = S / 2, cy = S / 2;
+
+  const rg = ctx.createRadialGradient(cx, cy, 2, cx, cy, S * 0.42);
+  rg.addColorStop(0,   hexColor + '88');
+  rg.addColorStop(0.5, hexColor + '22');
+  rg.addColorStop(1,   'rgba(0,0,0,0)');
+  ctx.fillStyle = rg;
+  ctx.fillRect(0, 0, S, S);
+
+  ctx.shadowColor = hexColor;
+  ctx.shadowBlur  = selected ? 10 : 5;
+  ctx.fillStyle   = selected ? '#ffffff' : hexColor;
+  ctx.strokeStyle = selected ? '#ffffff' : hexColor;
+  ctx.lineWidth   = 1.2;
+
+  ctx.beginPath();
+  ctx.moveTo(cx,             cy - S * 0.35);
+  ctx.lineTo(cx + S * 0.13,  cy + S * 0.10);
+  ctx.lineTo(cx + S * 0.06,  cy + S * 0.20);
+  ctx.lineTo(cx,             cy + S * 0.12);
+  ctx.lineTo(cx - S * 0.06,  cy + S * 0.20);
+  ctx.lineTo(cx - S * 0.13,  cy + S * 0.10);
+  ctx.closePath();
+  ctx.globalAlpha = selected ? 1.0 : 0.9;
+  ctx.fill();
+  ctx.globalAlpha = 1;
+  ctx.stroke();
+
+  const tex = new THREE.CanvasTexture(c);
+  _texCache.set(cacheKey, tex);
+  return tex;
 }
+
+function buildAnchorTexture(): THREE.CanvasTexture {
+  return buildShipTexture('#445544', false);
+}
+
+// ── LOD scale ─────────────────────────────────────────────────────────────────
+
+function shipScale(alt: number): number {
+  if (alt > 3.0) return 0.6;
+  if (alt > 2.0) return 0.8;
+  if (alt > 1.0) return 1.0;
+  return 1.3;
+}
+
+// ── Tooltip state ─────────────────────────────────────────────────────────────
+
+interface TooltipState { x: number; y: number; ev: GlobeEvent; }
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
-/** Dynamic marker cap based on globe camera altitude.
- *  Ships are HTML DOM elements — the most expensive layer type.
- *  Use aggressive LOD to prevent layout/paint storms when zoomed out. */
-function shipCap(alt: number): number {
-  if (alt > 2.5) return 60;    // far out — minimum DOM elements
-  if (alt > 1.8) return 150;   // mid distance
-  return 300;                  // close-up — default cap
-}
-
-type ShipDatum = { el: HTMLElement; lat: number; lng: number; alt: number };
-
 export default function ShipLayer() {
-  const globe  = useGlobe();
-  const globeRef = useRef(globe);
+  const globe      = useGlobe() as unknown as GlobeEx | null;
+  const globeRef   = useRef(globe);
   globeRef.current = globe;
 
-  const cameraAltitude  = useGlobeStore((s) => s.cameraAltitude);
-  const cap             = shipCap(cameraAltitude);
-  const ships          = useLayerData('ship', cap);
-  const isVisible      = useGlobeStore((s) => s.layers.ships);
-  const selectEvent    = useGlobeStore((s) => s.selectEvent);
-  const selectedEventId = useGlobeStore((s) => s.selectedEventId);
-  const setLayer       = useHtmlMarkersStore((s) => s.setLayer);
+  const isVisible   = useGlobeStore((s) => s.layers.ships);
+  const selectedId  = useGlobeStore((s) => s.selectedEventId);
+  const selectEvent = useGlobeStore((s) => s.selectEvent);
+  const cameraAlt   = useGlobeStore((s) => s.cameraAltitude);
+  const setLayer    = useHtmlMarkersStore((s) => s.setLayer);
 
-  const elemCache = useRef<Map<string, HTMLElement>>(new Map());
+  // Dynamic render cap based on zoom level
+  const renderCap = cameraAlt > 3.0 ? 800 : cameraAlt > 2.0 ? 2000 : 5000;
+  const ships     = useLayerData('ship', renderCap);
 
-  useEffect(() => { ensureStyles(); }, []);
+  const spritesRef = useRef<THREE.Sprite[]>([]);
+  const evMapRef   = useRef<Map<THREE.Sprite, GlobeEvent>>(new Map());
+  const groupRef   = useRef<THREE.Group | null>(null);
 
-  // Clear slot on unmount
-  useEffect(() => () => { setLayer('ship', []); }, [setLayer]);
+  const [tooltip, setTooltip] = useState<TooltipState | null>(null);
+  const mouseRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
+  const rafRef   = useRef<number>(0);
 
+  // Clear HTML ship slot (we no longer use htmlMarkersStore for ships)
+  useEffect(() => { setLayer('ship', []); return () => { setLayer('ship', []); }; }, [setLayer]);
+
+  // ── Build / rebuild sprites when data changes ───────────────────────────────
   useEffect(() => {
-    if (!isVisible) { setLayer('ship', []); return; }
+    const g = globeRef.current;
+    if (!g) return;
+    const scene = g.scene();
 
-    const data: ShipDatum[] = [];
+    if (groupRef.current) {
+      scene.remove(groupRef.current);
+      spritesRef.current.forEach((s) => s.material.dispose());
+      spritesRef.current = [];
+      evMapRef.current.clear();
+    }
+
+    if (!isVisible || ships.length === 0) { groupRef.current = null; return; }
+
+    const group = new THREE.Group();
+    group.name  = 'nexus-ship-layer';
+    const sprites: THREE.Sprite[]              = [];
+    const evMap   = new Map<THREE.Sprite, GlobeEvent>();
 
     for (const ev of ships) {
-      // Skip unlocated events
-      if (ev.latitude === 0 && ev.longitude === 0) continue;
+      const lat = (ev as unknown as Record<string, unknown>).lat != null
+        ? (ev as unknown as Record<string, unknown>).lat as number
+        : ev.latitude;
+      const lng = (ev as unknown as Record<string, unknown>).lng != null
+        ? (ev as unknown as Record<string, unknown>).lng as number
+        : ev.longitude;
+      if (lat == null || lng == null) continue;
 
-      const isSel = ev.id === selectedEventId;
-      let el = elemCache.current.get(ev.id);
+      const meta     = (ev.metadata ?? {}) as Record<string, unknown>;
+      const speedKts = (meta.sog_kts ?? meta.speed ?? ev.speed ?? 1) as number;
+      const heading  = (meta.heading ?? ev.heading ?? 0) as number;
+      const isAnchor = speedKts < 0.5;
+      const isSel    = ev.id === selectedId;
 
-      if (!el) {
-        el = mkShipEl(ev, isSel);
-        el.addEventListener('click', () => {
-          selectEvent(ev.id);
-          globeRef.current?.pointOfView(
-            { lat: ev.latitude, lng: ev.longitude, altitude: 1.5 },
-            800,
-          );
-        });
-        elemCache.current.set(ev.id, el);
-      } else {
-        updateEl(el, ev, isSel);
+      const tex = isAnchor
+        ? buildAnchorTexture()
+        : buildShipTexture(shipColor(ev), isSel);
+
+      const mat = new THREE.SpriteMaterial({
+        map: tex, transparent: true,
+        opacity:         isAnchor ? 0.40 : isSel ? 1.0 : 0.82,
+        depthTest:       false,
+        sizeAttenuation: false,
+      });
+      mat.rotation = (heading * Math.PI) / 180;
+
+      const sprite = new THREE.Sprite(mat);
+      const sc     = shipScale(cameraAlt) * (isSel ? 1.7 : 1.0) * 0.018;
+      sprite.scale.set(sc, sc, sc);
+
+      const cc = g.getCoords(lat, lng, 0.002);
+      sprite.position.set(cc.x, cc.y, cc.z);
+
+      group.add(sprite);
+      sprites.push(sprite);
+      evMap.set(sprite, ev);
+    }
+
+    scene.add(group);
+    groupRef.current  = group;
+    spritesRef.current = sprites;
+    evMapRef.current  = evMap;
+
+    return () => {
+      scene.remove(group);
+      sprites.forEach((s) => s.material.dispose());
+    };
+  }, [ships, isVisible, selectedId, cameraAlt]);
+
+  // ── Raycaster hover ─────────────────────────────────────────────────────────
+  useEffect(() => {
+    const g = globeRef.current;
+    if (!g) return;
+    const canvas = g.renderer().domElement;
+
+    const onMove = (e: MouseEvent) => { mouseRef.current = { x: e.clientX, y: e.clientY }; };
+    canvas.addEventListener('mousemove', onMove, { passive: true });
+
+    const rc = new THREE.Raycaster();
+    rc.params.Sprite = { threshold: 0.04 };
+
+    const tick = () => {
+      rafRef.current = requestAnimationFrame(tick);
+      const g2      = globeRef.current;
+      const sprites = spritesRef.current;
+      if (!g2 || !sprites.length) return;
+
+      const rect = canvas.getBoundingClientRect();
+      const ndcX = ((mouseRef.current.x - rect.left) / rect.width)  * 2 - 1;
+      const ndcY = -((mouseRef.current.y - rect.top)  / rect.height) * 2 + 1;
+      rc.setFromCamera(new THREE.Vector2(ndcX, ndcY), g2.camera());
+
+      const hits = rc.intersectObjects(sprites);
+      if (hits.length) {
+        const ev = evMapRef.current.get(hits[0].object as THREE.Sprite);
+        if (ev) { setTooltip({ x: mouseRef.current.x, y: mouseRef.current.y, ev }); canvas.style.cursor = 'pointer'; return; }
       }
+      setTooltip(null);
+      canvas.style.cursor = '';
+    };
+    rafRef.current = requestAnimationFrame(tick);
 
-      data.push({ el, lat: ev.latitude, lng: ev.longitude, alt: 0.012 });
+    return () => {
+      cancelAnimationFrame(rafRef.current);
+      canvas.removeEventListener('mousemove', onMove);
+    };
+  }, []);
+
+  // ── Click ────────────────────────────────────────────────────────────────────
+  const handleClick = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    const g = globeRef.current;
+    if (!g || !spritesRef.current.length) return;
+    const canvas = g.renderer().domElement;
+    const rect   = canvas.getBoundingClientRect();
+    const ndcX   = ((e.clientX - rect.left) / rect.width)  * 2 - 1;
+    const ndcY   = -((e.clientY - rect.top)  / rect.height) * 2 + 1;
+    const rc     = new THREE.Raycaster();
+    rc.params.Sprite = { threshold: 0.04 };
+    rc.setFromCamera(new THREE.Vector2(ndcX, ndcY), g.camera());
+    const hits = rc.intersectObjects(spritesRef.current);
+    if (hits.length) {
+      const ev = evMapRef.current.get(hits[0].object as THREE.Sprite);
+      if (ev) selectEvent(ev.id);
     }
+  }, [selectEvent]);
 
-    // Prune stale cache entries
-    const liveIds = new Set(ships.map((e) => e.id));
-    for (const [id] of elemCache.current) {
-      if (!liveIds.has(id)) elemCache.current.delete(id);
-    }
-
-    setLayer('ship', data);
-  }, [ships, isVisible, selectEvent, selectedEventId, setLayer]);
-
-  return null;
+  // ── Tooltip ──────────────────────────────────────────────────────────────────
+  return (
+    <div style={{ position: 'fixed', inset: 0, pointerEvents: 'none', zIndex: 5 }}
+         onClick={handleClick as unknown as React.MouseEventHandler}>
+      {tooltip && (() => {
+        const ev   = tooltip.ev;
+        const meta = (ev.metadata ?? {}) as Record<string, unknown>;
+        const col  = shipColor(ev);
+        const spd  = (meta.sog_kts ?? meta.speed ?? ev.speed) as number | undefined;
+        const hdg  = (meta.heading ?? ev.heading) as number | undefined;
+        const lat  = ((ev as unknown as Record<string,unknown>).lat ?? ev.latitude) as number;
+        const lng  = ((ev as unknown as Record<string,unknown>).lng ?? ev.longitude) as number;
+        return (
+          <div style={{
+            position: 'fixed', left: tooltip.x + 14, top: tooltip.y - 10,
+            background: 'rgba(0,0,0,0.9)', border: `1px solid ${col}66`,
+            padding: '7px 11px', fontFamily: "'JetBrains Mono', monospace",
+            fontSize: '10.5px', lineHeight: '1.6', color: '#d0ffd8',
+            borderRadius: 3, pointerEvents: 'none', zIndex: 9999,
+            minWidth: 160, maxWidth: 240, boxShadow: '0 2px 16px rgba(0,0,0,0.7)',
+          }}>
+            <div style={{ color: col, fontWeight: 700, marginBottom: 3 }}>
+              {ev.title.split('—')[0].trim()}
+            </div>
+            {!!meta.vessel_type  && <div style={{ opacity: 0.7 }}>Type: {meta.vessel_type as string}</div>}
+            {spd  != null        && <div style={{ opacity: 0.7 }}>Speed: {Number(spd).toFixed(1)} kts</div>}
+            {hdg  != null        && <div style={{ opacity: 0.7 }}>HDG: {Number(hdg).toFixed(0)}°</div>}
+            {!!meta.flag         && <div style={{ opacity: 0.7 }}>Flag: {meta.flag as string}</div>}
+            {!!meta.destination  && <div style={{ opacity: 0.6 }}>→ {meta.destination as string}</div>}
+            <div style={{ opacity: 0.5, fontSize: 9.5, marginTop: 4 }}>
+              {lat?.toFixed(3)}°, {lng?.toFixed(3)}°
+            </div>
+          </div>
+        );
+      })()}
+    </div>
+  );
 }

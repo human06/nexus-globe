@@ -40,7 +40,23 @@ from app.db.redis import get_layer_snapshot, subscribe_channel
 logger = logging.getLogger(__name__)
 
 HEARTBEAT_INTERVAL = 30  # seconds between pings
-MAX_SNAPSHOT_EVENTS = 2000  # cap per-layer snapshot; each flight ~400 B → ~800 KB total
+# Per-layer WS snapshot caps.
+# Ships are numerous but small (~250 B each); flights/news are larger.
+_LAYER_SNAPSHOT_CAPS: dict[str, int] = {
+    "ship":      5_000,   # AIS: 15 k in DB, send top 5 k by recency
+    "flight":    2_000,
+    "news":      2_000,
+    "satellite": 2_000,
+    "conflict":  2_000,
+    "disaster":  2_000,
+    "traffic":     500,
+    "camera":      200,
+}
+MAX_SNAPSHOT_EVENTS = 2_000  # fallback for unlisted layers
+
+
+def _layer_cap(layer: str) -> int:
+    return _LAYER_SNAPSHOT_CAPS.get(layer, MAX_SNAPSHOT_EVENTS)
 
 
 class ConnectionManager:
@@ -175,7 +191,7 @@ class ConnectionManager:
             events: list[dict] = []
             if raw_events:
                 # Limit snapshot size to avoid giant WS frames that freeze the event loop
-                raw_events = raw_events[:MAX_SNAPSHOT_EVENTS]
+                raw_events = raw_events[:_layer_cap(layer)]
                 events = [json.loads(raw) for raw in raw_events]
                 # Filter out ungeolocated events (they cannot render on the map)
                 events = [
@@ -224,9 +240,9 @@ class ConnectionManager:
                       AND location IS NOT NULL
                       AND (expires_at IS NULL OR expires_at > :now)
                     ORDER BY created_at DESC
-                    LIMIT 2000
+                    LIMIT :lim
                 """),
-                {"layer": layer, "now": now},
+                {"layer": layer, "now": now, "lim": _layer_cap(layer)},
             )
             results = []
             for r in rows.mappings():
