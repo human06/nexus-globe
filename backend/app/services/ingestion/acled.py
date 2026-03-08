@@ -1,141 +1,145 @@
-"""ACLED Conflict Data Ingestion — Story 3.2.
+"""Conflict Data Ingestion via GDELT Events v2 — free, no API key required.
 
-Polls the Armed Conflict Location & Event Data (ACLED) REST API hourly for
-the past 7 days of global conflict events: battles, explosions, protests,
-riots, violence against civilians, and strategic developments.
+Downloads the GDELT v2 export CSV every 30 minutes (15-min batches),
+filters QuadClass 3 (Verbal Conflict) and 4 (Material Conflict) events,
+and maps them to the GlobeEvent schema.
 
-Requires ACLED_API_KEY + ACLED_EMAIL in environment (skip gracefully if absent).
-API docs: https://acleddata.com/acleddatanew/wp-content/uploads/2021/11/ACLED_API-User-Guide_September-2021.pdf
+GDELT Events API: https://www.gdeltproject.org/data.html
+lastupdate.txt:   http://data.gdeltproject.org/gdeltv2/lastupdate.txt
 
-Severity mapping:
-  Battles (fatalities > 10)           → 5
-  Explosions/Remote violence          → 4
-  Violence against civilians          → 4
-  Battles (fatalities ≤ 10)           → 3
-  Riots with fatalities               → 3
-  Riots without fatalities            → 2
-  Protests                            → 2
-  Strategic developments              → 1
-  Bonus: fatalities > 50              → always 5
+CAMEO conflict root codes used:
+  14 = PROTEST             → protest
+  15 = EXHIBIT FORCE POSTURE → military_posture
+  17 = COERCE              → coercion
+  18 = ASSAULT             → assault
+  19 = FIGHT               → battle
+  20 = ENGAGE IN MASS VIOLENCE → mass_violence
 
-Events expire 30 days from the event date (conflict events have long relevance).
+GoldsteinScale → severity:
+  < -7   → 5  (extreme violence)
+  -7..-5 → 4  (serious conflict)
+  -5..-3 → 3  (moderate conflict)
+  -3..0  → 2  (minor conflict)
+  >= 0   → 1  (verbal only)
 """
 from __future__ import annotations
 
+import io
 import logging
-from collections import Counter
+import zipfile
 from datetime import datetime, timedelta, timezone
 from typing import Any
+from collections import Counter
 
 import httpx
 
-from app.config import settings
 from app.services.ingestion.base import BaseIngestionService
 
 logger = logging.getLogger(__name__)
 
-ACLED_BASE_URL = "https://acleddata.com/api/acled/read"
+LASTUPDATE_URL = "http://data.gdeltproject.org/gdeltv2/lastupdate.txt"
 
-# ACLED event_type → internal category
-_EVENT_TYPE_MAP: dict[str, str] = {
-    "Battles":                      "battle",
-    "Explosions/Remote violence":   "explosion",
-    "Violence against civilians":   "civilian_violence",
-    "Protests":                     "protest",
-    "Riots":                        "riot",
-    "Strategic developments":       "strategic",
+# CAMEO EventRootCode → internal category
+_ROOT_CODE_MAP: dict[str, str] = {
+    "14": "protest",
+    "15": "military_posture",
+    "17": "coercion",
+    "18": "assault",
+    "19": "battle",
+    "20": "mass_violence",
 }
 
-# Internal category → base severity (before fatality adjustment)
-_SEVERITY_MAP: dict[str, int] = {
-    "battle":            3,
-    "explosion":         4,
-    "civilian_violence": 4,
-    "protest":           2,
-    "riot":              2,
-    "strategic":         1,
+# GDELT v2 export CSV column indices (0-based, tab-delimited)
+_COL = {
+    "event_id":      0,
+    "date":          1,   # YYYYMMDD
+    "event_code":    26,
+    "base_code":     27,
+    "root_code":     28,
+    "quad_class":    29,  # 3=VerbalConflict 4=MatConflict
+    "goldstein":     30,
+    "num_mentions":  31,
+    "avg_tone":      34,
+    "geo_type":      50,  # 3=US city 4=world city 5=world state
+    "geo_fullname":  51,
+    "geo_country":   52,
+    "geo_lat":       55,
+    "geo_long":      56,
+    "date_added":    58,
+    "source_url":    59,
 }
 
 
-def _compute_severity(event_type: str, category: str, fatalities: int) -> int:
-    """Compute severity 1-5 from ACLED event type and fatality count."""
-    if fatalities > 50:
+def _goldstein_to_severity(gs: float) -> int:
+    if gs < -7:
         return 5
-
-    base = _SEVERITY_MAP.get(category, 1)
-
-    if category == "battle":
-        return 5 if fatalities > 10 else 3
-    if category == "riot" and fatalities > 0:
+    if gs < -5:
+        return 4
+    if gs < -3:
         return 3
-    return base
+    if gs < 0:
+        return 2
+    return 1
 
 
-def _build_title(row: dict) -> str:
-    """Build event title: notes excerpt or fallback to type-in-location."""
-    notes: str = row.get("notes") or ""
-    if notes.strip():
-        return notes.strip()[:200]
-    event_type: str = row.get("event_type") or "Conflict"
-    location: str = row.get("location") or ""
-    country: str = row.get("country") or ""
-    parts = [p for p in [location, country] if p]
-    location_str = ", ".join(parts) if parts else "unknown location"
-    return f"{event_type} in {location_str}"
+def _cameo_category(root_code: str) -> str:
+    return _ROOT_CODE_MAP.get(root_code, "conflict")
 
 
 class ACLEDIngestionService(BaseIngestionService):
-    """Ingests global conflict events from the ACLED API (hourly)."""
+    """Ingests global conflict events from GDELT Events v2 (every 30 min, free)."""
 
-    source_name = "acled"
-    poll_interval_seconds = 3600
+    source_name = "gdelt_conflict"
+    poll_interval_seconds = 1800  # 30 minutes
 
     # ------------------------------------------------------------------ #
     # fetch_raw                                                            #
     # ------------------------------------------------------------------ #
 
     async def fetch_raw(self) -> Any:
-        """Return the raw ACLED JSON payload, or None if unavailable."""
-        api_key: str = settings.acled_api_key or ""
-        email: str = settings.acled_email or ""
-
-        if not api_key or not email:
-            logger.warning(
-                "[acled] ACLED_API_KEY / ACLED_EMAIL not set — skipping. "
-                "Register at https://acleddata.com/register/ to enable conflict data."
-            )
-            return None
-
-        # Last 7 days in YYYY-MM-DD format
-        since_date = (datetime.now(timezone.utc) - timedelta(days=7)).strftime("%Y-%m-%d")
-
-        params = {
-            "key": api_key,
-            "email": email,
-            "event_date": since_date,
-            "event_date_where": ">",
-            "limit": "500",
-            "_format": "json",
-        }
-
+        """Fetch latest GDELT events CSV, return list of row lists."""
         try:
             async with httpx.AsyncClient(timeout=30.0) as client:
-                resp = await client.get(ACLED_BASE_URL, params=params)
+                # Step 1: get the latest file URL from lastupdate.txt
+                resp = await client.get(LASTUPDATE_URL)
                 resp.raise_for_status()
-                payload = resp.json()
-        except httpx.HTTPStatusError as exc:
-            logger.error("[acled] HTTP %s — %s", exc.response.status_code, exc.response.text[:300])
-            return None
-        except Exception as exc:  # noqa: BLE001
-            logger.error("[acled] Fetch failed: %s: %s", type(exc).__name__, exc)
+                lines = resp.text.strip().splitlines()
+
+            # Format: "size hash url" — URL is field [2]
+            export_url = None
+            for line in lines:
+                if "export" in line:
+                    parts = line.split()
+                    export_url = parts[2] if len(parts) >= 3 else parts[0]
+                    break
+
+            if not export_url:
+                logger.error("[gdelt_conflict] Could not parse lastupdate.txt")
+                return None
+
+            logger.info("[gdelt_conflict] Downloading %s", export_url)
+
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                resp = await client.get(export_url)
+                resp.raise_for_status()
+                zip_bytes = resp.content
+
+        except Exception as exc:
+            logger.error("[gdelt_conflict] Fetch failed: %s: %s", type(exc).__name__, exc)
             return None
 
-        if not payload.get("success") or payload.get("status") != 200:
-            logger.warning("[acled] API returned non-success: %s", str(payload)[:300])
+        # Step 2: unzip and read CSV rows
+        try:
+            with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
+                csv_filename = zf.namelist()[0]
+                with zf.open(csv_filename) as f:
+                    raw_text = f.read().decode("utf-8", errors="replace")
+        except Exception as exc:
+            logger.error("[gdelt_conflict] Unzip failed: %s", exc)
             return None
 
-        rows = payload.get("data") or []
-        logger.info("[acled] Fetched %d raw conflict events (since %s)", len(rows), since_date)
+        rows = [line.split("\t") for line in raw_text.strip().splitlines() if line]
+        logger.info("[gdelt_conflict] Fetched %d raw event rows", len(rows))
         return rows
 
     # ------------------------------------------------------------------ #
@@ -143,103 +147,98 @@ class ACLEDIngestionService(BaseIngestionService):
     # ------------------------------------------------------------------ #
 
     async def normalize(self, raw: Any) -> list[dict]:
-        """Convert ACLED rows → GlobeEvent dicts."""
         if not raw:
             return []
 
         events: list[dict] = []
         category_counts: Counter[str] = Counter()
+        now = datetime.now(timezone.utc)
 
         for row in raw:
-            # ── coordinates ──────────────────────────────────────────────
-            try:
-                lat = float(row.get("latitude") or 0)
-                lng = float(row.get("longitude") or 0)
-            except (TypeError, ValueError):
-                continue  # skip un-geocoded events
+            # Minimum column count check
+            if len(row) < 60:
+                continue
 
+            # Filter: only QuadClass 3 (Verbal Conflict) or 4 (Material Conflict)
+            try:
+                quad = int(row[_COL["quad_class"]])
+            except (ValueError, IndexError):
+                continue
+            if quad not in (3, 4):
+                continue
+
+            # Coordinates — require world city / world state level precision
+            try:
+                lat = float(row[_COL["geo_lat"]])
+                lng = float(row[_COL["geo_long"]])
+            except (ValueError, IndexError):
+                continue
             if lat == 0.0 and lng == 0.0:
-                continue  # ACLED sometimes emits 0,0 for unknown locations
+                continue
 
-            # ── classification ───────────────────────────────────────────
-            acled_event_type: str = row.get("event_type") or "Unknown"
-            category: str = _EVENT_TYPE_MAP.get(acled_event_type, "conflict")
-
+            # GoldsteinScale
             try:
-                fatalities = int(row.get("fatalities") or 0)
-            except (TypeError, ValueError):
-                fatalities = 0
+                goldstein = float(row[_COL["goldstein"]])
+            except (ValueError, IndexError):
+                goldstein = -1.0
 
-            severity = _compute_severity(acled_event_type, category, fatalities)
+            severity = _goldstein_to_severity(goldstein)
 
-            # ── dates ────────────────────────────────────────────────────
-            event_date_str: str = row.get("event_date") or ""
+            # Root code → category
+            root_code = row[_COL["root_code"]].strip()
+            category  = _cameo_category(root_code)
+
+            # Date
+            date_str = row[_COL["date"]].strip()
             try:
-                event_dt = datetime.strptime(event_date_str, "%Y-%m-%d").replace(
-                    tzinfo=timezone.utc
-                )
+                event_dt = datetime.strptime(date_str, "%Y%m%d").replace(tzinfo=timezone.utc)
             except (ValueError, TypeError):
-                event_dt = datetime.now(timezone.utc)
+                event_dt = now
 
-            expires_at = event_dt + timedelta(days=30)
+            expires_at = event_dt + timedelta(days=14)
 
-            # ── title / description ──────────────────────────────────────
-            title = _build_title(row)
-            notes: str = row.get("notes") or ""
+            # Location / title
+            geo_name   = row[_COL["geo_fullname"]].strip() or "Unknown location"
+            geo_cty    = row[_COL["geo_country"]].strip()
+            source_url = row[_COL["source_url"]].strip() if len(row) > _COL["source_url"] else ""
+            event_code = row[_COL["event_code"]].strip()
+            event_id   = row[_COL["event_id"]].strip()
 
-            # ── source identifiers ───────────────────────────────────────
-            data_id: str = str(row.get("data_id") or row.get("event_id_cnty") or "")
-            country: str = row.get("country") or ""
-            location: str = row.get("location") or ""
+            title = f"{category.replace('_', ' ').title()} event in {geo_name}"
 
-            # ── assemble event ───────────────────────────────────────────
+            try:
+                num_mentions = int(row[_COL["num_mentions"]])
+            except (ValueError, IndexError):
+                num_mentions = 1
+
             event: dict = {
-                "event_type": "conflict",
-                "category": category,
-                "title": title,
-                "description": notes[:2000] if notes else title,
-                "latitude": lat,
-                "longitude": lng,
-                "altitude_m": 0.0,
-                "severity": severity,
-                "source": "acled",
-                "source_id": data_id,
-                "source_url": (
-                    f"https://acleddata.com/data-export-tool/"
-                ),
-                "expires_at": expires_at,
+                "event_type":  "conflict",
+                "category":    category,
+                "title":       title,
+                "description": f"GDELT conflict event ({event_code}) in {geo_name}. Goldstein scale: {goldstein:+.1f}. Mentions: {num_mentions}.",
+                "latitude":    lat,
+                "longitude":   lng,
+                "altitude_m":  0.0,
+                "severity":    severity,
+                "source":      "gdelt_conflict",
+                "source_id":   event_id,
+                "source_url":  source_url,
+                "expires_at":  expires_at,
                 "metadata": {
-                    "acled_data_id": data_id,
-                    "event_date": event_date_str,
-                    "event_type": acled_event_type,
-                    "sub_event_type": row.get("sub_event_type") or "",
-                    "actor1": row.get("actor1") or "",
-                    "actor2": row.get("actor2") or "",
-                    "assoc_actor1": row.get("assoc_actor_1") or "",
-                    "assoc_actor2": row.get("assoc_actor_2") or "",
-                    "interaction": row.get("interaction") or "",
-                    "fatalities": fatalities,
-                    "country": country,
-                    "admin1": row.get("admin1") or "",
-                    "admin2": row.get("admin2") or "",
-                    "admin3": row.get("admin3") or "",
-                    "location": location,
-                    "geo_precision": row.get("geo_precision") or "",
-                    "source_scale": row.get("source_scale") or "",
-                    "notes": notes[:500] if notes else "",
-                    "tags": row.get("tags") or "",
-                    "timestamp": row.get("timestamp") or "",
+                    "event_code":    event_code,
+                    "root_code":     root_code,
+                    "quad_class":    quad,
+                    "goldstein":     goldstein,
+                    "num_mentions":  num_mentions,
+                    "geo_fullname":  geo_name,
+                    "geo_country":   geo_cty,
+                    "event_date":    date_str,
                 },
             }
             events.append(event)
             category_counts[category] += 1
 
-        # ── summary log ──────────────────────────────────────────────────
         total = len(events)
-        summary_parts = [f"{cnt} {cat}" for cat, cnt in category_counts.most_common(6)]
-        logger.info(
-            "[acled] normalised %d conflict events (%s)",
-            total,
-            ", ".join(summary_parts) if summary_parts else "none",
-        )
+        summary = ", ".join(f"{n} {cat}" for cat, n in category_counts.most_common(6))
+        logger.info("[gdelt_conflict] normalised %d conflict events (%s)", total, summary or "none")
         return events
