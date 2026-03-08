@@ -106,10 +106,10 @@ function buildAnchorTexture(): THREE.CanvasTexture {
 // ── LOD scale ─────────────────────────────────────────────────────────────────
 
 function shipScale(alt: number): number {
-  if (alt > 3.0) return 0.6;
-  if (alt > 2.0) return 0.8;
-  if (alt > 1.0) return 1.0;
-  return 1.3;
+  if (alt > 3.0) return 1.5;
+  if (alt > 2.0) return 1.8;
+  if (alt > 1.0) return 2.2;
+  return 2.8;
 }
 
 // ── Tooltip state ─────────────────────────────────────────────────────────────
@@ -165,12 +165,8 @@ export default function ShipLayer() {
     const evMap   = new Map<THREE.Sprite, GlobeEvent>();
 
     for (const ev of ships) {
-      const lat = (ev as unknown as Record<string, unknown>).lat != null
-        ? (ev as unknown as Record<string, unknown>).lat as number
-        : ev.latitude;
-      const lng = (ev as unknown as Record<string, unknown>).lng != null
-        ? (ev as unknown as Record<string, unknown>).lng as number
-        : ev.longitude;
+      const lat = ev.latitude;
+      const lng = ev.longitude;
       if (lat == null || lng == null) continue;
 
       const meta     = (ev.metadata ?? {}) as Record<string, unknown>;
@@ -186,16 +182,16 @@ export default function ShipLayer() {
       const mat = new THREE.SpriteMaterial({
         map: tex, transparent: true,
         opacity:         isAnchor ? 0.40 : isSel ? 1.0 : 0.82,
-        depthTest:       false,
-        sizeAttenuation: false,
+        depthWrite:      false,
+        sizeAttenuation: true,
       });
       mat.rotation = (heading * Math.PI) / 180;
 
       const sprite = new THREE.Sprite(mat);
-      const sc     = shipScale(cameraAlt) * (isSel ? 1.7 : 1.0) * 0.018;
-      sprite.scale.set(sc, sc, sc);
+      const sc     = shipScale(cameraAlt) * (isSel ? 1.7 : 1.0);
+      sprite.scale.setScalar(sc);
 
-      const cc = g.getCoords(lat, lng, 0.002);
+      const cc = g.getCoords(lat, lng, 0);
       sprite.position.set(cc.x, cc.y, cc.z);
 
       group.add(sprite);
@@ -281,8 +277,6 @@ export default function ShipLayer() {
         const col  = shipColor(ev);
         const spd  = (meta.sog_kts ?? meta.speed ?? ev.speed) as number | undefined;
         const hdg  = (meta.heading ?? ev.heading) as number | undefined;
-        const lat  = ((ev as unknown as Record<string,unknown>).lat ?? ev.latitude) as number;
-        const lng  = ((ev as unknown as Record<string,unknown>).lng ?? ev.longitude) as number;
         return (
           <div style={{
             position: 'fixed', left: tooltip.x + 14, top: tooltip.y - 10,
@@ -301,7 +295,7 @@ export default function ShipLayer() {
             {!!meta.flag         && <div style={{ opacity: 0.7 }}>Flag: {meta.flag as string}</div>}
             {!!meta.destination  && <div style={{ opacity: 0.6 }}>→ {meta.destination as string}</div>}
             <div style={{ opacity: 0.5, fontSize: 9.5, marginTop: 4 }}>
-              {lat?.toFixed(3)}°, {lng?.toFixed(3)}°
+              {ev.latitude?.toFixed(3)}°, {ev.longitude?.toFixed(3)}°
             </div>
           </div>
         );
