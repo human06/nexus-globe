@@ -6,9 +6,13 @@
  * - 4 "coming soon" layers dimmed (no interactivity)
  * - Keyboard shortcuts 1–4 for the active layers
  * - Footer: "INTEL FEEDS: N/8 ACTIVE"
+ *
+ * Story 3.11: Activated satellites (5), conflicts (6), traffic (7)
  */
 import { useEffect } from 'react';
 import LayerToggle from './LayerToggle';
+import SeveritySlider from './SeveritySlider';
+import HeatmapToggle from './HeatmapToggle';
 import { useGlobeStore } from '../../stores/globeStore';
 
 const LAYER_CONFIG = [
@@ -16,9 +20,9 @@ const LAYER_CONFIG = [
   { key: 'news',       label: '📰 News',       color: '#00f0ff', type: 'news',      functional: true,  shortcut: '2' },
   { key: 'disasters',  label: '🌋 Disasters',  color: '#ff6600', type: 'disaster',  functional: true,  shortcut: '3' },
   { key: 'ships',      label: '🚢 Ships',      color: '#00ff88', type: 'ship',      functional: true,  shortcut: '4' },
-  { key: 'satellites', label: '🛰 Satellites', color: '#ff00aa', type: 'satellite', functional: false, shortcut: null },
-  { key: 'conflicts',  label: '⚔ Conflicts',  color: '#ff0044', type: 'conflict',  functional: false, shortcut: null },
-  { key: 'traffic',    label: '🚦 Traffic',    color: '#aa44ff', type: 'traffic',   functional: false, shortcut: null },
+  { key: 'satellites', label: '🛰 Satellites', color: '#ff00aa', type: 'satellite', functional: true,  shortcut: '5' },
+  { key: 'conflicts',  label: '⚔ Conflicts',  color: '#ff0044', type: 'conflict',  functional: true,  shortcut: '6' },
+  { key: 'traffic',    label: '🚦 Traffic',    color: '#aa44ff', type: 'traffic',   functional: true,  shortcut: '7' },
   { key: 'cameras',    label: '📷 Cameras',    color: '#888888', type: 'camera',    functional: false, shortcut: null },
 ] as const;
 
@@ -40,13 +44,16 @@ export default function LayerControls() {
     (l) => l.functional && layers[l.key as LayerKey],
   ).length;
 
-  // Keyboard shortcuts 1–4
+  // Keyboard shortcuts 1–7
   useEffect(() => {
     const keyMap: Record<string, LayerKey> = {
       '1': 'flights',
       '2': 'news',
       '3': 'disasters',
       '4': 'ships',
+      '5': 'satellites',
+      '6': 'conflicts',
+      '7': 'traffic',
     };
     const onKey = (e: KeyboardEvent) => {
       // Don't fire when typing in an input
@@ -104,6 +111,12 @@ export default function LayerControls() {
           onToggle={() => functional && toggleLayer(key as LayerKey)}
         />
       ))}
+
+      <SeveritySlider />
+
+      <div style={{ padding: '4px 10px 2px' }}>
+        <HeatmapToggle />
+      </div>
 
       {/* Footer status */}
       <div

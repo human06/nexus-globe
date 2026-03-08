@@ -45,7 +45,9 @@ interface AIStatus {
 }
 
 export default function LiveStats() {
-  const events = useGlobeStore((s) => s.events);
+  const events       = useGlobeStore((s) => s.events);
+  const timeMode     = useGlobeStore((s) => s.timeMode);
+  const heatmapMode  = useGlobeStore((s) => s.heatmapMode);
   const [aiStatus, setAiStatus] = useState<AIStatus | null>(null);
   const [newsExpanded, setNewsExpanded] = useState(false);
 
@@ -91,6 +93,7 @@ export default function LiveStats() {
 
   const order = ['flight', 'news', 'ship', 'satellite', 'disaster', 'conflict', 'traffic', 'camera'];
   const active = order.filter((t) => (counts[t] ?? 0) > 0);
+  const totalEvents = events.size;
 
   const aiColor  = aiStatus?.status === 'ok' ? '#00ff88' : aiStatus?.status === 'error' ? '#ff2244' : '#666';
   const aiLabel  = aiStatus?.status === 'ok'
@@ -108,6 +111,38 @@ export default function LiveStats() {
         gap: '3px',
       }}
     >
+      {/* Total event count */}
+      {totalEvents > 0 && (
+        <div
+          style={{
+            fontFamily: 'var(--font-mono)',
+            fontSize: '0.6rem',
+            color: 'rgba(0,240,255,0.55)',
+            letterSpacing: '0.06em',
+          }}
+        >
+          TOTAL: {totalEvents.toLocaleString()} EVENTS
+        </div>
+      )}
+
+      {/* Mode indicator */}
+      <div
+        style={{
+          fontFamily: 'var(--font-mono)',
+          fontSize: '0.6rem',
+          letterSpacing: '0.08em',
+          color: timeMode === 'live' ? '#00ff88' : '#ffee00',
+          textShadow: timeMode === 'live' ? '0 0 5px #00ff88' : '0 0 5px #ffee00',
+        }}
+      >
+        MODE: {timeMode === 'live' ? 'LIVE' : 'HISTORICAL'}
+        {heatmapMode && (
+          <span style={{ marginLeft: 6, color: '#ffee00', textShadow: '0 0 5px #ffee00' }}>
+            [HEATMAP]
+          </span>
+        )}
+      </div>
+
       {/* Event counts row */}
       <div
         style={{

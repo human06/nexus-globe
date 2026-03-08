@@ -307,7 +307,13 @@ export default function NewsLayer() {
     const cache = elemCache.current;
     const usedIds = new Set<string>();
 
-    const data: MarkerDatum[] = news.map((ev) => {
+    // Skip ungeolocated events (lat=0, lng=0 means the backend had no coordinates
+    // — typically RSS wire stories where AI geocoding hasn't run yet).
+    const geolocated = news.filter(
+      (ev) => !(ev.latitude === 0 && ev.longitude === 0),
+    );
+
+    const data: MarkerDatum[] = geolocated.map((ev) => {
       usedIds.add(ev.id);
       const isSelected = ev.id === selectedEventId;
 

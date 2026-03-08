@@ -5,6 +5,7 @@ import HUDOverlay from './components/HUD/HUDOverlay';
 import NewsTicker from './components/HUD/NewsTicker';
 import SidePanel from './components/Panel/SidePanel';
 import LayerControls from './components/Controls/LayerControls';
+import TimelineScrubber from './components/Timeline/TimelineScrubber';
 import { useWebSocket } from './hooks/useWebSocket';
 
 // ── Error boundary — shows crash details instead of blank screen ─────────────
@@ -75,6 +76,9 @@ function AppInner() {
 
       {/* Layer 30 — News Ticker at bottom (has its own pointer-events: auto) */}
       <NewsTicker />
+
+      {/* Layer 31 — Timeline scrubber pinned to the very bottom */}
+      <TimelineScrubber />
     </div>
   );
 }

@@ -16,6 +16,7 @@ from app.services.ingestion.usgs import USGSIngestionService
 from app.services.ingestion.eonet import EONETIngestionService
 from app.services.ingestion.aisstream import AISStreamIngestionService
 from app.services.ingestion.acled import ACLEDIngestionService
+from app.services.ingestion.military_osint import MilitaryOSINTService
 from app.services.ingestion.traffic import TrafficIngestionService
 from app.services.dedup import cleanup_stale_events
 from app.services.ai_analyzer import get_analyzer
@@ -36,6 +37,7 @@ _services = [
     EONETIngestionService(),
     AISStreamIngestionService(),
     ACLEDIngestionService(),
+    MilitaryOSINTService(),
     TrafficIngestionService(),
 ]
 
@@ -180,7 +182,7 @@ def start_scheduler() -> AsyncIOScheduler:
     logger.info("[scheduler] Registered AI enrichment cycle every 60s")
 
     _scheduler.start()
-    logger.info("[scheduler] APScheduler started with %d jobs.", len(_services) + 2)
+    logger.info("[scheduler] APScheduler started with %d jobs.", len(_services) + 3)
     return _scheduler
 
 

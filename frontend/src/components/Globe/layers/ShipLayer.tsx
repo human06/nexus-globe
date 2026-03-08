@@ -189,6 +189,15 @@ function updateEl(el: HTMLElement, ev: GlobeEvent, isSelected: boolean): void {
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
+/** Dynamic marker cap based on globe camera altitude.
+ *  Ships are HTML DOM elements — the most expensive layer type.
+ *  Use aggressive LOD to prevent layout/paint storms when zoomed out. */
+function shipCap(alt: number): number {
+  if (alt > 2.5) return 60;    // far out — minimum DOM elements
+  if (alt > 1.8) return 150;   // mid distance
+  return 300;                  // close-up — default cap
+}
+
 type ShipDatum = { el: HTMLElement; lat: number; lng: number; alt: number };
 
 export default function ShipLayer() {
@@ -196,7 +205,9 @@ export default function ShipLayer() {
   const globeRef = useRef(globe);
   globeRef.current = globe;
 
-  const ships          = useLayerData('ship');
+  const cameraAltitude  = useGlobeStore((s) => s.cameraAltitude);
+  const cap             = shipCap(cameraAltitude);
+  const ships          = useLayerData('ship', cap);
   const isVisible      = useGlobeStore((s) => s.layers.ships);
   const selectEvent    = useGlobeStore((s) => s.selectEvent);
   const selectedEventId = useGlobeStore((s) => s.selectedEventId);
@@ -224,7 +235,7 @@ export default function ShipLayer() {
       if (!el) {
         el = mkShipEl(ev, isSel);
         el.addEventListener('click', () => {
-          selectEvent(ev);
+          selectEvent(ev.id);
           globeRef.current?.pointOfView(
             { lat: ev.latitude, lng: ev.longitude, altitude: 1.5 },
             800,

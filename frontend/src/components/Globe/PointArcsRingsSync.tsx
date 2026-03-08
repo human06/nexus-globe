@@ -80,7 +80,6 @@ export function ArcsLayerSync() {
       .arcEndLat((d: object)   => (d as ArcDatum).endLat)
       .arcEndLng((d: object)   => (d as ArcDatum).endLng)
       .arcAltitude((d: object) => (d as ArcDatum).altitude)
-      .arcAltitudeAutoScale(false)
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       .arcColor(((d: object) => (d as ArcDatum).color) as unknown as (d: object) => string)
       .arcStroke((d: object) => (d as ArcDatum).stroke)

@@ -32,6 +32,18 @@ interface GlobeStore {
   isAutoRotating: boolean;
   /** Camera fly-to target (set to trigger a smooth pan on the globe) */
   flyToTarget: FlyToTarget | null;
+  /** Timeline time-travel mode */
+  timeMode: 'live' | 'historical';
+  /** Timestamp (ms) currently displayed in historical mode */
+  currentViewTime: number;
+  /** Whether heatmap density mode is active */
+  heatmapMode: boolean;
+  /**
+   * Current globe camera altitude (Globe.GL "altitude" units; 1.0 = Earth radius).
+   * Used by layer components for LOD decisions (fewer markers when zoomed out).
+   * Default 2.5 matches the initial pointOfView in GlobeCanvas.
+   */
+  cameraAltitude: number;
 
   // Actions
   toggleLayer: (layer: keyof LayerVisibility) => void;
@@ -41,10 +53,15 @@ interface GlobeStore {
   removeEvent: (id: string) => void;
   removeExpired: () => void;
   setTimeRange: (range: [number, number]) => void;
+  setSeverityRange: (range: [number, number]) => void;
   setSearchQuery: (query: string) => void;
   setWsStatus: (status: WSStatus) => void;
   flyTo: (target: FlyToTarget) => void;
   clearFlyTo: () => void;
+  setTimeMode: (mode: 'live' | 'historical') => void;
+  setCurrentViewTime: (time: number) => void;
+  toggleHeatmapMode: () => void;
+  setCameraAltitude: (alt: number) => void;
 }
 
 const now = Date.now();
@@ -71,6 +88,10 @@ export const useGlobeStore = create<GlobeStore>((set) => ({
   wsStatus: 'disconnected',
   isAutoRotating: true,
   flyToTarget: null,
+  timeMode: 'live',
+  currentViewTime: Date.now(),
+  heatmapMode: false,
+  cameraAltitude: 2.5,
 
   toggleAutoRotate: () =>
     set((state) => ({ isAutoRotating: !state.isAutoRotating })),
@@ -112,6 +133,8 @@ export const useGlobeStore = create<GlobeStore>((set) => ({
 
   setTimeRange: (range) => set({ timeRange: range }),
 
+  setSeverityRange: (range) => set({ severityRange: range }),
+
   setSearchQuery: (query) => set({ searchQuery: query }),
 
   setWsStatus: (status) => set({ wsStatus: status }),
@@ -119,6 +142,14 @@ export const useGlobeStore = create<GlobeStore>((set) => ({
   flyTo: (target) => set({ flyToTarget: target }),
 
   clearFlyTo: () => set({ flyToTarget: null }),
+
+  setTimeMode: (mode) => set({ timeMode: mode }),
+
+  setCurrentViewTime: (time) => set({ currentViewTime: time }),
+
+  toggleHeatmapMode: () => set((state) => ({ heatmapMode: !state.heatmapMode })),
+
+  setCameraAltitude: (alt) => set({ cameraAltitude: alt }),
 }));
 
 // Convenience type export

@@ -7,9 +7,7 @@
 import { createContext, useContext } from 'react';
 import type Globe from 'globe.gl';
 
-// GlobeInstance is the return type of Globe()(domElement)
-type GlobeFactory = typeof Globe;
-type GlobeInstance = ReturnType<ReturnType<GlobeFactory>>;
+type GlobeInstance = InstanceType<typeof Globe>;
 
 export type { GlobeInstance };
 

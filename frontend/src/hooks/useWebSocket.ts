@@ -66,6 +66,26 @@ function normalizeServerEvent(raw: Record<string, unknown>): GlobeEvent {
   };
 }
 
+function isObjectRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function isGlobeEventLike(value: unknown): value is GlobeEvent {
+  if (!isObjectRecord(value)) return false;
+  return (
+    typeof value.id === 'string' &&
+    typeof value.type === 'string' &&
+    typeof value.latitude === 'number' &&
+    typeof value.longitude === 'number'
+  );
+}
+
+function normalizeIncomingEvent(value: unknown): GlobeEvent | null {
+  if (isGlobeEventLike(value)) return value;
+  if (isObjectRecord(value)) return normalizeServerEvent(value);
+  return null;
+}
+
 // ── Hook ──────────────────────────────────────────────────────────────────────
 
 export interface UseWebSocketReturn {
@@ -128,21 +148,31 @@ export function useWebSocket(): UseWebSocketReturn {
 
     switch (msg.type) {
       case 'snapshot': {
-        const raw = msg.data as Record<string, unknown>[];
-        if (Array.isArray(raw)) {
-          store.upsertEvents(raw.map(normalizeServerEvent));
+        if (Array.isArray(msg.data)) {
+          const normalized = msg.data
+            .map((item) => normalizeIncomingEvent(item))
+            .filter((item): item is GlobeEvent => item !== null);
+          if (normalized.length) {
+            store.upsertEvents(normalized);
+          }
         }
         break;
       }
       case 'event_update': {
-        const ev = normalizeServerEvent(msg.data as Record<string, unknown>);
-        store.upsertEvents([ev]);
+        const ev = normalizeIncomingEvent(msg.data);
+        if (ev) {
+          store.upsertEvents([ev]);
+        }
         break;
       }
       case 'event_batch': {
-        const raw = msg.data as Record<string, unknown>[];
-        if (Array.isArray(raw)) {
-          store.upsertEvents(raw.map(normalizeServerEvent));
+        if (Array.isArray(msg.data)) {
+          const normalized = msg.data
+            .map((item) => normalizeIncomingEvent(item))
+            .filter((item): item is GlobeEvent => item !== null);
+          if (normalized.length) {
+            store.upsertEvents(normalized);
+          }
         }
         break;
       }
@@ -208,8 +238,35 @@ export function useWebSocket(): UseWebSocketReturn {
     mountedRef.current = true;
     connect();
 
+    // ── Tab visibility: freeze updates when the user switches away ──────────
+    // When hidden: close WS and cancel pending reconnect timers to save CPU/GPU.
+    // When visible: force immediate reconnect so the server sends a fresh snapshot.
+    const onVisibilityChange = () => {
+      if (document.hidden) {
+        // Suspend — quietly close without triggering the auto-reconnect path
+        if (reconnectTimerRef.current) {
+          clearTimeout(reconnectTimerRef.current);
+          reconnectTimerRef.current = null;
+        }
+        const ws = wsRef.current;
+        if (ws) {
+          ws.onclose = null; // suppress reconnect from onclose handler
+          ws.close();
+          wsRef.current = null;
+        }
+        useGlobeStore.getState().setWsStatus('disconnected');
+      } else {
+        // Resume — reconnect immediately (server will push a fresh snapshot)
+        backoffIdxRef.current = 0;
+        connect();
+      }
+    };
+
+    document.addEventListener('visibilitychange', onVisibilityChange);
+
     return () => {
       mountedRef.current = false;
+      document.removeEventListener('visibilitychange', onVisibilityChange);
       if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
       if (wsRef.current) {
         wsRef.current.onclose = null; // prevent reconnect on intentional close

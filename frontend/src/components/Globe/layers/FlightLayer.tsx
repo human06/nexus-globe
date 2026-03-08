@@ -140,9 +140,19 @@ function projectForward(
 
 // ── Component ──────────────────────────────────────────────────────────────
 
+/** Dynamic marker cap based on globe camera altitude (zoom level).
+ *  Three discrete LOD zones to minimise React re-renders from continuous zoom. */
+function flightCap(alt: number): number {
+  if (alt > 2.5) return 120;   // far out — only high-priority flights
+  if (alt > 1.8) return 300;   // mid distance
+  return 500;                  // close-up — default cap
+}
+
 export default function FlightLayer() {
   const globe           = useGlobe();
-  const flights         = useLayerData('flight');
+  const cameraAltitude  = useGlobeStore((s) => s.cameraAltitude);
+  const cap             = flightCap(cameraAltitude);
+  const flights         = useLayerData('flight', cap);
   const isVisible       = useGlobeStore((s) => s.layers.flights);
   const selectEvent     = useGlobeStore((s) => s.selectEvent);
   const selectedEventId = useGlobeStore((s) => s.selectedEventId);
@@ -279,5 +289,7 @@ export default function FlightLayer() {
       setArcs('flight_sel', []);
     }
   }, [globe, flights, selectedEventId, setArcs, setRings]);
+
+  return null;
 }
 

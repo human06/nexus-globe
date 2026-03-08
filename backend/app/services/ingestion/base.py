@@ -78,12 +78,21 @@ class BaseIngestionService(ABC):
         PUBLISH_LIMIT = 200
         REDIS_CHUNK = 500
         try:
+            import json as _json
             client = get_redis()
             for chunk_start in range(0, len(upserted), REDIS_CHUNK):
                 await asyncio.sleep(0)  # yield event loop between chunks
                 chunk = upserted[chunk_start: chunk_start + REDIS_CHUNK]
                 pipe = client.pipeline(transaction=False)
                 for payload_json, expires_at, event_id in chunk:
+                    # Skip ungeolocated events — they cannot render on the map
+                    # and would pollute the Redis snapshot served to clients.
+                    try:
+                        ev_data = _json.loads(payload_json)
+                        if ev_data.get('latitude') is None or ev_data.get('longitude') is None:
+                            continue
+                    except Exception:
+                        pass
                     ttl = 300
                     if expires_at is not None:
                         remaining = int((expires_at - datetime.now(timezone.utc)).total_seconds())

@@ -18,8 +18,18 @@ const STATUS_COLORS = {
   disconnected: '#ff2244',
 } as const;
 
+function formatHistoricalTime(ts: number): string {
+  return new Date(ts).toLocaleString('en-GB', {
+    day: '2-digit', month: 'short', year: 'numeric',
+    hour: '2-digit', minute: '2-digit',
+    timeZone: 'UTC',
+  }) + ' UTC';
+}
+
 export default function HUDOverlay() {
-  const wsStatus = useGlobeStore((s) => s.wsStatus);
+  const wsStatus      = useGlobeStore((s) => s.wsStatus);
+  const timeMode       = useGlobeStore((s) => s.timeMode);
+  const currentViewTime = useGlobeStore((s) => s.currentViewTime);
   const dotColor = STATUS_COLORS[wsStatus];
 
   return (
@@ -92,6 +102,26 @@ export default function HUDOverlay() {
               : 'Offline'}
           </div>
           <LiveStats />
+
+          {/* Historical mode banner */}
+          {timeMode === 'historical' && (
+            <div
+              style={{
+                fontFamily: 'var(--font-mono)',
+                fontSize: '0.65rem',
+                letterSpacing: '0.1em',
+                color: '#ffee00',
+                textShadow: '0 0 8px #ffee00',
+                background: 'rgba(255,238,0,0.1)',
+                border: '1px solid rgba(255,238,0,0.35)',
+                borderRadius: 3,
+                padding: '2px 8px',
+                marginTop: 2,
+              }}
+            >
+              HISTORICAL MODE — {formatHistoricalTime(currentViewTime)}
+            </div>
+          )}
 
           {/* ── Play / Pause auto-rotation ── */}
           <RotateToggle />

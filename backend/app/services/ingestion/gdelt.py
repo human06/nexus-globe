@@ -330,6 +330,11 @@ class GDELTIngestionService(BaseIngestionService):
             category  = _cameo_to_category(root_code, quad)
             severity  = _goldstein_to_severity(goldstein)
             published = _parse_sqldate(sqldate)
+            # Expire based on ingestion time so GDELT events (whose published
+            # date is YYYYMMDD with no time component, defaulting to midnight)
+            # don't expire immediately when ingested late in the day.
+            now_utc   = datetime.now(timezone.utc)
+            expires   = max(published + timedelta(hours=24), now_utc + timedelta(hours=24))
 
             events.append({
                 "event_type":  "news",
@@ -342,7 +347,7 @@ class GDELTIngestionService(BaseIngestionService):
                 "source":      "gdelt",
                 "source_id":   _source_id(url),
                 "source_url":  url,
-                "expires_at":  published + timedelta(hours=24),
+                "expires_at":  expires,
                 "metadata": {
                     "gdelt_enriched":  True,
                     "gdelt_themes":    [],

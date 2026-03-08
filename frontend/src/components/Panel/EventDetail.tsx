@@ -516,7 +516,7 @@ export default function EventDetail({ event }: { event: GlobeEvent }) {
       {event.type === 'flight' && (
         <div style={{ marginBottom: 8, borderBottom: '1px solid rgba(0,240,255,0.08)', paddingBottom: 8 }}>
           {/* Route banner — show only when we have origin or destination */}
-          {(meta?.origin || meta?.destination) && (
+          {(Boolean(meta?.origin) || Boolean(meta?.destination)) && (
             <div style={{
               display: 'flex',
               alignItems: 'center',

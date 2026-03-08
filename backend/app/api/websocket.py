@@ -172,13 +172,19 @@ class ConnectionManager:
         """
         try:
             raw_events = await get_layer_snapshot(layer)
+            events: list[dict] = []
             if raw_events:
                 # Limit snapshot size to avoid giant WS frames that freeze the event loop
                 raw_events = raw_events[:MAX_SNAPSHOT_EVENTS]
                 events = [json.loads(raw) for raw in raw_events]
-            else:
-                # Redis cold — query DB directly for non-expired events
-                logger.info("Redis cold for layer '%s', falling back to DB", layer)
+                # Filter out ungeolocated events (they cannot render on the map)
+                events = [
+                    ev for ev in events
+                    if ev.get('latitude') is not None and ev.get('longitude') is not None
+                ]
+            if not events:
+                # Redis cold or all events ungeolocated — query DB directly
+                logger.info("Redis cold (or all events ungeolocated) for layer '%s', falling back to DB", layer)
                 events = await self._db_snapshot(layer)
                 # Repopulate Redis cache for next time
                 for ev in events:
@@ -215,7 +221,9 @@ class ConnectionManager:
                         created_at, expires_at
                     FROM events
                     WHERE event_type = :layer
+                      AND location IS NOT NULL
                       AND (expires_at IS NULL OR expires_at > :now)
+                    ORDER BY created_at DESC
                     LIMIT 2000
                 """),
                 {"layer": layer, "now": now},

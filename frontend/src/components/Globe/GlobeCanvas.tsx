@@ -18,6 +18,7 @@ import ShipLayer from './layers/ShipLayer';
 import SatelliteLayer from './layers/SatelliteLayer';
 import ConflictLayer from './layers/ConflictLayer';
 import TrafficLayer from './layers/TrafficLayer';
+import HeatmapLayer from './layers/HeatmapLayer';
 import HtmlLayerSync from './HtmlLayerSync';
 import { PointsLayerSync, ArcsLayerSync, RingsLayerSync } from './PointArcsRingsSync';
 import { useGlobeStore } from '../../stores/globeStore';
@@ -36,9 +37,12 @@ export default function GlobeCanvas() {
   const isAutoRotating = useGlobeStore((s) => s.isAutoRotating);
   const flyToTarget    = useGlobeStore((s) => s.flyToTarget);
   const clearFlyTo     = useGlobeStore((s) => s.clearFlyTo);
+  const setCameraAltitude = useGlobeStore((s) => s.setCameraAltitude);
   // Ref so event handlers always see the latest store value without re-registering
   const isAutoRotatingRef = useRef(isAutoRotating);
   useEffect(() => { isAutoRotatingRef.current = isAutoRotating; }, [isAutoRotating]);
+  const setCameraAltitudeRef = useRef(setCameraAltitude);
+  useEffect(() => { setCameraAltitudeRef.current = setCameraAltitude; }, [setCameraAltitude]);
 
   // Ref to orbit controls so the store-sync effect can reach it
   const ctrlRef = useRef<ReturnType<InstanceType<typeof Globe>['controls']> | null>(null);
@@ -51,7 +55,7 @@ export default function GlobeCanvas() {
     // ── Instantiate Globe.GL ──────────────────────────────────────────────────
     let globe: GlobeInstance;
     try {
-      globe = Globe()(container)
+      globe = new Globe(container)
         .width(window.innerWidth)
         .height(window.innerHeight)
         .globeImageUrl('/textures/earth-dark.jpg')
@@ -93,6 +97,22 @@ export default function GlobeCanvas() {
     container.addEventListener('mouseup', scheduleResume);
     container.addEventListener('touchend', scheduleResume);
 
+    // ── Camera altitude → LOD tracking ────────────────────────────────────────
+    // Throttle: push altitude to the store at most once every 150 ms to avoid
+    // thrashing Zustand on every OrbitControls 'change' event.
+    let altThrottleTimer: ReturnType<typeof setTimeout> | null = null;
+    const onCameraChange = () => {
+      if (altThrottleTimer) return;
+      altThrottleTimer = setTimeout(() => {
+        altThrottleTimer = null;
+        const pov = (globe as unknown as { pointOfView: () => { altitude: number } }).pointOfView();
+        if (typeof pov?.altitude === 'number') {
+          setCameraAltitudeRef.current(pov.altitude);
+        }
+      }, 150);
+    };
+    ctrl.addEventListener('change', onCameraChange);
+
     // ── Load country polygons ─────────────────────────────────────────────────
     fetch('/data/countries.geojson')
       .then((r) => r.json())
@@ -125,6 +145,8 @@ export default function GlobeCanvas() {
       container.removeEventListener('touchstart', pauseRotation);
       container.removeEventListener('mouseup', scheduleResume);
       container.removeEventListener('touchend', scheduleResume);
+      ctrl.removeEventListener('change', onCameraChange);
+      if (altThrottleTimer) clearTimeout(altThrottleTimer);
       if (resumeTimerRef.current) clearTimeout(resumeTimerRef.current);
       globe._destructor();
     };
@@ -207,6 +229,8 @@ export default function GlobeCanvas() {
       {globeInstance && <SatelliteLayer />}
       {globeInstance && <ConflictLayer />}
       {globeInstance && <TrafficLayer />}
+      {/* Heatmap density overlay — replaces individual markers when active */}
+      {globeInstance && <HeatmapLayer />}
       {/* Single component that owns globe.htmlElementsData(): merges news + disaster + ship */}
       {globeInstance && <HtmlLayerSync />}
       {/* Single components that own globe.pointsData/arcsData/ringsData slots */}
